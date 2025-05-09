@@ -1,6 +1,5 @@
-#define FUSE_USE_VERSION 34
+#define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 17)
 
-// Max 10 files can be stored in the root directory
 #define MAX_FILES 10
 #define MAX_DIR 10
 
@@ -64,7 +63,6 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
 }
 
 struct dirinfo {
-    char *name;
     ino_t ino;
     bool dironly;
     ino_t files[MAX_FILES];
@@ -82,13 +80,11 @@ struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
     if (k == kh_end(dirh)) {
         dir = malloc(sizeof(struct dirinfo*));
         dir->ino = ino;
-        dir->name = (char *)malloc(MAX_FILENAME_LEN);
-        strncpy(dir->name, name, strlen(name));
-        dir->name[strlen(name)] = 0x0;
         dir->dironly = dironly;
         dir->ffree = 0;
-        k = kh_put(dirhash, dirh, dir->name, &absent);
+        k = kh_put(dirhash, dirh, fm.files[ino].name, &absent);
         kh_val(dirh, k) = dir;
+        //if (absent) kh_key(dirh, k) = strdup(dir->name);
     } else {
         dir = kh_val(dirh, k);
     }
@@ -153,17 +149,32 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn)
     dirh = kh_init(dirhash);
     opendirh = kh_init(opendirhash);
 
-    add_file(0, "", "\\", S_IFDIR);
+    add_file(0, "", "/", S_IFDIR);
     add_file(0, "", "*", S_IFDIR);
-    add_directory(1, "\\", 1);
+    add_directory(1, "/", 1);
     add_directory(2, "*", 0);
-    add_filetodir("\\", 2);
+    add_filetodir("/", 2);
 }
 
 static void smt_destroy(void *userdata) {
+    for (khint_t k = 0; k < kh_end(opendirh); ++k)
+        if (kh_exist(opendirh, k)) {
+            free(kh_val(opendirh, k));
+        }
     kh_destroy(opendirhash, opendirh);
+
+    for (int i = 1; i < fm.ffree; i++) {
+        free(fm.files[i].name);
+        //free(fm.files[i].data);
+    }
+
+    for (khint_t k = 0; k < kh_end(dirh); ++k)
+        if (kh_exist(dirh, k)) {
+            free(kh_val(dirh, k));
+            //free((char*)kh_key(dirh, k));
+        }
     kh_destroy(dirhash, dirh);
-    printf("cleaned up dirhash\n");
+    printf("finished cleanup/n");
 }
 
 static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
@@ -188,13 +199,13 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
             k = kh_get(dirhash, dirh, dir1);
             if (k != kh_end(dirh)) {
                 d1 = kh_val(dirh, k);
-                printf("found %s\n", d1->name);
+                printf("found %ld\n", d1->ino);
             }
             struct dirinfo *d2;
             k = kh_get(dirhash, dirh, dir2);
             if (k != kh_end(dirh)) {
                 d2 = kh_val(dirh, k);
-                printf("found %s\n", d2->name);
+                printf("found %ld\n", d2->ino);
             }
 
             //open both directories, compare file inodes
@@ -294,15 +305,6 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_
 	printf("exit dirbufadd\n");
 }
 
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize)
-{
-    if (off < bufsize)
-        return fuse_reply_buf(req, buf + off,
-                              min(bufsize - off, maxsize));
-    else
-        return fuse_reply_buf(req, NULL, 0);
-}
-
 void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
     printf("ropendir in directory -> %ld\n", ino);
@@ -349,6 +351,15 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     }
 }
 
+static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize)
+{
+    if (off < bufsize)
+        return fuse_reply_buf(req, buf + off,
+                              min(bufsize - off, maxsize));
+    else
+        return fuse_reply_buf(req, NULL, 0);
+}
+
 void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
                      struct fuse_file_info *fi)
 {
@@ -382,6 +393,13 @@ static void open_handler(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *
     if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
     } else {
+        //char path[256];
+        //sprintf(path, "%s/*/%s", devfile, fm.files[ino].name);
+        /*int fd = open(path, fi->flags & ~O_NOFOLLOW);
+        if (fd == -1)
+            return (void) fuse_reply_err(req, errno);
+        fi->fh = fd;
+        printf("%d\n", fd);*/
         fuse_reply_open(req, fi);
     }
 }
@@ -397,8 +415,8 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
         add_filetodir(fm.files[parent].name, ino);
         ropendir(NULL, NULL, parent, 0);
         if (parent != 1) {
-            //add_filetodir("\\", ino);
-            //ropendir(NULL, NULL, 1, 0);
+            add_filetodir("/", ino);
+            ropendir(NULL, NULL, 1, 0);
         }
 
         e.ino = ino;
@@ -460,7 +478,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     }
 
     if (fm.ffree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
-        ino_t ino = add_file(0x0, NULL, name, mode);
+        ino_t ino = add_file(strlen("dummy"), "dummy", name, mode);
         add_filetodir(fm.files[parent].name, ino);
         ropendir(NULL, NULL, parent, 0);
         if (parent != 2) {
@@ -484,6 +502,8 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
 static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
     printf("read_handler called for the file with inode number %ld\n", ino);
+    (void) fi;
+
     if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
     } else if (ino < fm.ffree) {
@@ -514,10 +534,10 @@ static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t si
 
 static void smt_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	int res;
-	(void) ino;
-	res = close(dup(fi->fh));
-	fuse_reply_err(req, res == -1 ? errno : 0);
+	//int res;
+	//res = close(dup(fi->fh));
+	//fuse_reply_err(req, res == -1 ? errno : 0);
+	fuse_reply_err(req, 0);
 }
 
 static void smt_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
@@ -577,7 +597,7 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
     } else {
         ino_t dir = add_file(0x0, 0x0, name, S_IFDIR);
         add_directory(dir, name, 0);
-        //add_filetodir("\\", dir);
+        //add_filetodir("/", dir);
 
         add_filetodir(name, ino);
     }
