@@ -30,7 +30,7 @@ struct file_info
     nlink_t nlink;
     uint64_t fd;
     int ffree;
-    ino_t dir[MAX_DIR]; //set of strings
+    ino_t *dir; //set of strings
 };
 
 struct file_map {
@@ -44,7 +44,7 @@ struct dirinfo {
     ino_t ino;
     bool dironly;
     int ffree;
-    ino_t files[MAX_FILES]; //set of inodes
+    ino_t *files; //set of inodes
 };
 
 KHASH_MAP_INIT_STR(dirhash, struct dirinfo*)
@@ -62,6 +62,7 @@ struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
         dir->ino = ino;
         dir->dironly = dironly;
         dir->ffree = 0;
+        dir->files = malloc(MAX_FILES*sizeof(ino_t));
         k = kh_put(dirhash, dirh, fm.files[ino].name, &absent);
         kh_val(dirh, k) = dir;
         //if (absent) kh_key(dirh, k) = strdup(dir->name);
@@ -105,6 +106,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
         fm.files[fm.ffree].mode = mode | 0777;
         fm.files[fm.ffree].fd = 0;
         fm.files[fm.ffree].ffree = 0;
+        fm.files[fm.ffree].dir = malloc(MAX_DIR*sizeof(ino_t));
         if ((mode & S_IFMT) == S_IFDIR) {
             fm.files[fm.ffree].nlink = 1;
             add_directory(fm.ffree, name, 0);
@@ -178,25 +180,27 @@ static void smt_destroy(void *userdata) {
         }
     kh_destroy(opendirhash, opendirh);
 
-    for (int i = 1; i < fm.ffree; i++) {
-        printf("%d\n", i);
-        printf("%s\n", fm.files[i].name);
-        free(fm.files[i].name);
-        free(fm.files[i].data);
-    }
-
     for (khint_t k = 0; k < kh_end(dirh); ++k)
         if (kh_exist(dirh, k)) {
-            free(kh_val(dirh, k));
+            struct dirinfo* dir = kh_val(dirh, k);
+            printf("%ld\n", dir->ino);
+            free(dir->files);
+            free(dir);
             //free((char*)kh_key(dirh, k));
         }
     kh_destroy(dirhash, dirh);
+
+    for (int i = 1; i < fm.ffree; i++) {
+        free(fm.files[i].name);
+        free(fm.files[i].data);
+        free(fm.files[i].dir);
+    }
+
     printf("finished cleanup\n");
 }
 
 static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-    printf("lookup_handler called: looking for %s\n", name);
     struct fuse_entry_param e;
     khint_t k;
 
@@ -257,7 +261,6 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 
 static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-    puts("getattr_handler called");
     struct stat stbuf;
 
     if (fm.ffree > ino) {
@@ -274,7 +277,6 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
 
 static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi)
 {
-    puts("setattr_handler called");
     struct stat stbuf;
 
     if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
@@ -383,7 +385,6 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
 void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
                      struct fuse_file_info *fi)
 {
-    printf("readdir_handler called with the inode number %ld\n", ino);
     (void)fi;
     struct dirbuf b;
 
@@ -397,9 +398,9 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     free(b.p);
 }
 
-void opendir_handler(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-    puts("opendir_handler called");
+    puts("opendir called");
     fi->fh = ino;
     fi->cache_readdir = 0;
     fi->keep_cache = 0;
@@ -407,9 +408,8 @@ void opendir_handler(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
     fuse_reply_open(req, fi);
 }
 
-static void open_handler(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-    puts("open_handler called");
     if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
     } else {
@@ -485,7 +485,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
 
-    printf("create_handler called with the filename as %s and mode as %d\n", name, mode);
+    printf("create called with filename %s and mode %d\n", name, mode);
 
     struct dirinfo *dir;
     khint_t k;
@@ -517,7 +517,6 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
 
 static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
 {
-    printf("read_handler called for the file with inode number %ld\n", ino);
     (void) fi;
 
     if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
@@ -529,9 +528,35 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
     fuse_reply_err(req, ENOENT);
 }
 
+static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+	int res = -1;
+    khint_t k;
+
+    k = add_opendir(parent);
+
+    if (k != kh_end(opendirh)) {
+        struct opendirinfo *opendir = kh_val(opendirh, k);
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (!strncmp(opendir->filenames[i], name, strlen(name))) {
+                struct file_info f = fm.files[opendir->fileinos[i]];
+                for (int j = 0; j < MAX_DIR; j++) {
+                    //remove inode from every f.dir[i];
+                }
+                free(f.name);
+                free(f.data);
+                ropendir(NULL, NULL, parent, 0);
+                res = 0;
+            }
+        }
+    }
+
+	fuse_reply_err(req, res == -1 ? errno : 0);
+}
+
 static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
 {
-    printf("write_handler called on the file with inode number %ld\n", ino);
+    printf("write called on the file %ld\n", ino);
     printf("offset = %lu and size=%zu\n", off, size);
     if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
@@ -621,21 +646,22 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
 }
 
 static struct fuse_lowlevel_ops operations = {
-    .lookup = smt_lookup,
     .init = smt_init,
     .destroy = smt_destroy,
-    .open = open_handler,
+    .lookup = smt_lookup,
+    .getattr = smt_getattr,
+    .setattr = smt_setattr,
+    .readdir = smt_readdir,
+    .opendir = smt_opendir,
+    .open = smt_open,
     .read = smt_read,
+    .mkdir = smt_mkdir,
+    .rename = smt_rename,
     .create = smt_create,
+    .unlink = smt_unlink,
     .write = smt_write,
     .flush = smt_flush,
     .release = smt_release,
-    .getattr = smt_getattr,
-    .setattr = smt_setattr,
-    .mkdir = smt_mkdir,
-    .rename = smt_rename,
-    .opendir = opendir_handler,
-    .readdir = smt_readdir,
     .listxattr = smt_listxattr,
     .setxattr = smt_setxattr,
 };
