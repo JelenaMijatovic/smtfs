@@ -199,43 +199,73 @@ static void smt_destroy(void *userdata) {
     printf("finished cleanup\n");
 }
 
+void dirset(const char* name, const char *pos) {
+
+    char *dir1 = (char *)malloc((pos-name)+1);
+    strncpy(dir1, name, pos-name);
+    dir1[pos-name] = '\0';
+    char *dir2 = (char *)malloc(strlen(name)-(pos-name));
+    strncpy(dir2, name+(pos-name)+2, strlen(name)-(pos-name)-1);
+    dir2[strlen(name)-(pos-name)-1] = '\0';
+
+    struct dirinfo *d1;
+    khint_t k = kh_get(dirhash, dirh, dir1);
+    if (k != kh_end(dirh)) {
+        d1 = kh_val(dirh, k);
+    }
+    struct dirinfo *d2;
+    k = kh_get(dirhash, dirh, dir2);
+    if (k != kh_end(dirh)) {
+        d2 = kh_val(dirh, k);
+    }
+
+    char map[MAX_FILES*10] = {0};
+    for (int i = 0; i < d1->ffree; i++) {
+        map[d1->files[i]]++;
+    }
+    for (int i = 0; i < d2->ffree; i++) {
+        map[d2->files[i]]++;
+    }
+
+    if (name[(pos-name)+1] == '&') {
+        for (int i = 1; i < MAX_FILES*10; i++) {
+            if (map[i] != 2) {
+                map[i] = 0;
+            } else {
+                printf("%s\n", fm.files[i].name);
+            }
+        }
+    } else if (name[(pos-name)+1] == '|') {
+        for (int i = 1; i < MAX_FILES*10; i++) {
+            if (map[i] > 0) {
+                printf("%s\n", fm.files[i].name);
+            }
+        }
+    } else if (name[(pos-name)+1] == '^') {
+        for (int i = 1; i < MAX_FILES*10; i++) {
+            if (map[i] != 1) {
+                map[i] = 0;
+            } else {
+                printf("%s\n", fm.files[i].name);
+            }
+        }
+    }
+    //show ones that repeat &, all |, show up once ^, or in the first but not the second ~
+    //use a hash, fill with one dir and compare with the other
+    //do ropendir
+    free(dir1);
+    free(dir2);
+}
+
 static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     struct fuse_entry_param e;
     khint_t k;
 
     memset(&e, 0, sizeof(e));
-    char const *pos = strstr(name, "\\"); //and maybe multiples
+    char const *pos = strstr(name, "\\");
     if (pos != NULL && (pos-name)+1 != strlen(name)) {
-        if (name[(pos-name)+1] == '&') {
-
-            char *dir1 = (char *)malloc((pos-name)+1);
-            strncpy(dir1, name, pos-name);
-            dir1[pos-name] = '\0';
-            char *dir2 = (char *)malloc(strlen(name)-(pos-name));
-            strncpy(dir2, name+(pos-name)+2, strlen(name)-(pos-name)-1);
-            dir2[strlen(name)-(pos-name)-1] = '\0';
-
-            struct dirinfo *d1;
-            k = kh_get(dirhash, dirh, dir1);
-            if (k != kh_end(dirh)) {
-                d1 = kh_val(dirh, k);
-                printf("found %ld\n", d1->ino);
-            }
-            struct dirinfo *d2;
-            k = kh_get(dirhash, dirh, dir2);
-            if (k != kh_end(dirh)) {
-                d2 = kh_val(dirh, k);
-                printf("found %ld\n", d2->ino);
-            }
-
-            //open both directories, compare file inodes
-            //show ones that repeat &, all |, show up once ^, or in the first but not the second ~
-            //use a hash, fill with one dir and compare with the other
-            //do ropendir
-            free(dir1);
-            free(dir2);
-        }
+        dirset(name, pos);
     }
 
     k = add_opendir(parent);
@@ -326,7 +356,7 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_
 void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
     printf("ropendir in directory -> %ld\n", ino);
-
+    // if ino > max_file * 10 its a set op
     struct dirinfo *dir = NULL;
     khint_t k;
     k = kh_get(dirhash, dirh, fm.files[ino].name);
@@ -429,7 +459,9 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
 
-    if (fm.ffree < MAX_FILES) {
+    khint_t k = kh_get(dirhash, dirh, name); //make sure the name isn't already present
+
+    if (fm.ffree < MAX_FILES && k == kh_end(dirh)) {
         ino_t ino = add_file(0x0, 0x0, name, S_IFDIR);
         ropendir(NULL, NULL, 1, 0);
         if (parent != 1) {
