@@ -35,7 +35,7 @@ struct file_info
 
 struct file_map {
     int ffree;
-    struct file_info files[MAX_FILES*10];
+    struct file_info *files;
 };
 
 struct file_map fm;
@@ -122,8 +122,8 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
 
 struct opendirinfo {
     ino_t ino;
+    ino_t *fileinos;
     char filenames[MAX_FILES][MAX_FILENAME_LEN]; //filename-inode hashmap
-    ino_t fileinos[MAX_FILES];
 };
 
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
@@ -138,6 +138,7 @@ khint_t add_opendir(ino_t ino) {
     if (k == kh_end(opendirh)) {
         struct opendirinfo *dir = malloc(sizeof(struct opendirinfo*));
         dir->ino = ino;
+        dir->fileinos = malloc(MAX_FILES*sizeof(ino_t));
         k = kh_put(opendirhash, opendirh, ino, &absent);
         kh_val(opendirh, k) = dir;
     }
@@ -153,6 +154,7 @@ void fatal_error(const char *message) {
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     fm.ffree = 1; //init to inode 1
+    fm.files = malloc(10*MAX_FILES*sizeof(struct file_map));
     dirh = kh_init(dirhash);
     opendirh = kh_init(opendirhash);
 
@@ -176,14 +178,15 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 static void smt_destroy(void *userdata) {
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
-            free(kh_val(opendirh, k));
+            struct opendirinfo* dir = kh_val(opendirh, k);
+            free(dir->fileinos);
+            free(dir);
         }
     kh_destroy(opendirhash, opendirh);
 
     for (khint_t k = 0; k < kh_end(dirh); ++k)
         if (kh_exist(dirh, k)) {
             struct dirinfo* dir = kh_val(dirh, k);
-            printf("%ld\n", dir->ino);
             free(dir->files);
             free(dir);
             //free((char*)kh_key(dirh, k));
@@ -195,8 +198,9 @@ static void smt_destroy(void *userdata) {
         free(fm.files[i].data);
         free(fm.files[i].dir);
     }
+    free(fm.files);
 
-    printf("finished cleanup\n");
+    printf("smt_destroy: Finished cleanup\n");
 }
 
 void dirset(const char* name, const char *pos) {
@@ -288,6 +292,16 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     }
     fuse_reply_err(req, ENOENT);
 }
+
+/*static void smt_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
+    fm.files[ino].nlink -= nlookup;
+    if (!fm.files[ino].nlink) {
+        free(fm.files[ino].name);
+        free(fm.files[ino].data);
+        free(fm.files[ino].dir);
+        fm.files[ino] = 0; //curr free and next free
+    }
+}*/
 
 static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
@@ -661,20 +675,49 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 
 static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size, int flags)
 {
-    int saverr = ENOSYS;
+    int saverr = 0;
     khint_t k;
     k = kh_get(dirhash, dirh, name);
 
-    if (k != kh_end(dirh)) { //check if already there
+    if (k != kh_end(dirh)) {
+        struct dirinfo *dir = kh_value(dirh, k);
+        for (int i = 0; i < fm.files[ino].ffree; i++) {
+            if (fm.files[ino].dir[i] == dir->ino) {
+                saverr = -1;
+                break;
+            }
+        }
         add_filetodir(name, ino);
     } else {
         add_file(0x0, 0x0, name, S_IFDIR);
         add_filetodir(name, ino);
     }
 
-    saverr = 0;
-
     fuse_reply_err(req, saverr);
+}
+
+static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
+    int saverr = -1;
+    khint_t k;
+
+    k = kh_get(dirhash, dirh, name);
+    if (k != kh_end(dirh)) {
+        struct dirinfo *dir = kh_value(dirh, k);
+        for (int i = 0; i < fm.files[ino].ffree; i++) {
+            if (fm.files[ino].dir[i] == dir->ino) {
+                saverr = 0;
+                break;
+            }
+        }
+            //remove_filefromdir(name, ino);
+            //remove from fm.files[ino].dir
+            //remove from dir.files
+            //ropenr if present in opendirh
+    } else {
+        saverr = -1;
+    }
+
+	fuse_reply_err(req, saverr);
 }
 
 static struct fuse_lowlevel_ops operations = {
@@ -696,6 +739,7 @@ static struct fuse_lowlevel_ops operations = {
     .release = smt_release,
     .listxattr = smt_listxattr,
     .setxattr = smt_setxattr,
+    .removexattr = smt_removexattr,
 };
 
 int main(int argc, char **argv)
