@@ -73,6 +73,22 @@ struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
     return dir;
 }
 
+int remove_directory(const char* name) {
+    struct dirinfo *dir = NULL;
+    khint_t k;
+
+    k = kh_get(dirhash, dirh, name);
+    if (k != kh_end(dirh)) {
+        dir = kh_val(dirh, k);
+        while (dir->ffree != 0) {
+
+            dir->ffree--;
+        }
+        kh_del(dirhash, dirh, k);
+    }
+    return 0;
+}
+
 int add_filetodir(const char* name, ino_t ino) {
 
     struct dirinfo *dir;
@@ -88,6 +104,33 @@ int add_filetodir(const char* name, ino_t ino) {
             fm.files[ino].nlink++;
             printf("adding file %ld at %d\n", dir->files[dir->ffree], dir->ffree);
             return dir->ffree++;
+        }
+    }
+
+    return 0;
+}
+
+int remove_filefromdir(const char *name, ino_t ino) {
+    struct dirinfo *dir;
+    khint_t k;
+
+    k = kh_get(dirhash, dirh, name);
+    if (k != kh_end(dirh)) {
+        dir = kh_val(dirh, k);
+        for (int i = 0; i < dir->ffree; i++) {
+            if (dir->files[i] == ino) {
+                dir->files[i] = 0;
+                dir->ffree = i;
+                for (int j = 0; j < fm.files[ino].ffree; j++) {
+                    if (fm.files[ino].dir[j] == dir->ino) {
+                        fm.files[ino].dir[j] = 0;
+                        fm.files[ino].ffree = j;
+                        fm.files[ino].nlink--;
+                        break;
+                    }
+                }
+                break;
+            }
         }
     }
 
@@ -118,6 +161,23 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
         return fm.ffree++;
     }
     return -1;
+}
+
+int remove_file(ino_t ino) {
+
+    for (int i = 0; i < fm.files[ino].ffree; i++) {
+        remove_filefromdir(fm.files[fm.files[ino].dir[i]].name, ino);
+    }
+    if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
+        remove_directory(fm.files[ino].name);
+        fm.files[ino].nlink--;
+    }
+    free(fm.files[ino].name);
+    free(fm.files[ino].data);
+    free(fm.files[ino].dir);
+    fm.files[ino].ffree = 0;
+    fm.ffree = ino;
+    return ino;
 }
 
 struct opendirinfo {
