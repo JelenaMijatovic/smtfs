@@ -33,12 +33,14 @@ struct file_info
     ino_t *dir; //set of strings
 };
 
-struct file_map {
-    int ffree;
-    struct file_info *files;
+struct file_info *filemap;
+
+struct freemap {
+    int currfree;
+    ino_t *nextfr;
 };
 
-struct file_map fm;
+struct freemap frmp;
 
 struct dirinfo {
     ino_t ino;
@@ -63,7 +65,7 @@ struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
         dir->dironly = dironly;
         dir->ffree = 0;
         dir->files = malloc(MAX_FILES*sizeof(ino_t));
-        k = kh_put(dirhash, dirh, fm.files[ino].name, &absent);
+        k = kh_put(dirhash, dirh, filemap[ino].name, &absent);
         kh_val(dirh, k) = dir;
         //if (absent) kh_key(dirh, k) = strdup(dir->name);
     } else {
@@ -99,9 +101,9 @@ int add_filetodir(const char* name, ino_t ino) {
         dir = kh_val(dirh, k);
         if (dir->ffree < MAX_FILES) {
             dir->files[dir->ffree] = ino;
-            fm.files[ino].dir[fm.files[ino].ffree] = dir->ino;
-            fm.files[ino].ffree++;
-            fm.files[ino].nlink++;
+            filemap[ino].dir[filemap[ino].ffree] = dir->ino;
+            filemap[ino].ffree++;
+            filemap[ino].nlink++;
             printf("adding file %ld at %d\n", dir->files[dir->ffree], dir->ffree);
             return dir->ffree++;
         }
@@ -121,11 +123,11 @@ int remove_filefromdir(const char *name, ino_t ino) {
             if (dir->files[i] == ino) {
                 dir->files[i] = 0;
                 dir->ffree = i;
-                for (int j = 0; j < fm.files[ino].ffree; j++) {
-                    if (fm.files[ino].dir[j] == dir->ino) {
-                        fm.files[ino].dir[j] = 0;
-                        fm.files[ino].ffree = j;
-                        fm.files[ino].nlink--;
+                for (int j = 0; j < filemap[ino].ffree; j++) {
+                    if (filemap[ino].dir[j] == dir->ino) {
+                        filemap[ino].dir[j] = 0;
+                        filemap[ino].ffree = j;
+                        filemap[ino].nlink--;
                         break;
                     }
                 }
@@ -139,44 +141,61 @@ int remove_filefromdir(const char *name, ino_t ino) {
 
 int add_file(size_t size, char *data, const char *name, mode_t mode) {
 
-    if (fm.ffree < MAX_FILES*10) {
-        fm.files[fm.ffree].ino = fm.ffree;
-        fm.files[fm.ffree].name = (char *)malloc(MAX_FILENAME_LEN);
-        strncpy(fm.files[fm.ffree].name, name, strlen(name));
-        fm.files[fm.ffree].name[strlen(name)] = 0x0;
-        fm.files[fm.ffree].size = size;
-        fm.files[fm.ffree].data = data;
-        fm.files[fm.ffree].mode = mode | 0777;
-        fm.files[fm.ffree].fd = 0;
-        fm.files[fm.ffree].ffree = 0;
-        fm.files[fm.ffree].dir = malloc(MAX_DIR*sizeof(ino_t));
+    if (frmp.currfree < MAX_FILES*10) {
+        filemap[frmp.currfree].ino = frmp.currfree;
+        filemap[frmp.currfree].name = (char *)malloc(MAX_FILENAME_LEN);
+        strncpy(filemap[frmp.currfree].name, name, strlen(name));
+        filemap[frmp.currfree].name[strlen(name)] = 0x0;
+        filemap[frmp.currfree].size = size;
+        filemap[frmp.currfree].data = data;
+        filemap[frmp.currfree].mode = mode | 0777;
+        filemap[frmp.currfree].fd = 0;
+        filemap[frmp.currfree].ffree = 0;
+        filemap[frmp.currfree].dir = malloc(MAX_DIR*sizeof(ino_t));
         if ((mode & S_IFMT) == S_IFDIR) {
-            fm.files[fm.ffree].nlink = 1;
-            add_directory(fm.ffree, name, 0);
-            add_filetodir(fm.files[1].name, fm.ffree); //root directory contains all directories (bar itself)
+            filemap[frmp.currfree].nlink = 1;
+            add_directory(frmp.currfree, name, 0);
+            add_filetodir(filemap[1].name, frmp.currfree); //root directory contains all directories (bar itself)
         } else {
-            fm.files[fm.ffree].nlink = 0;
-            add_filetodir(fm.files[2].name, fm.ffree); //* directory contains all regular files
+            filemap[frmp.currfree].nlink = 0;
+            add_filetodir(filemap[2].name, frmp.currfree); //* directory contains all regular files
         }
-        return fm.ffree++;
+
+        ino_t ino = frmp.currfree;
+        frmp.currfree = frmp.nextfr[frmp.currfree];
+        return ino;
     }
     return -1;
 }
 
 int remove_file(ino_t ino) {
 
-    for (int i = 0; i < fm.files[ino].ffree; i++) {
-        remove_filefromdir(fm.files[fm.files[ino].dir[i]].name, ino);
+    for (int i = 0; i < filemap[ino].ffree; i++) {
+        remove_filefromdir(filemap[filemap[ino].dir[i]].name, ino);
     }
-    if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
-        remove_directory(fm.files[ino].name);
-        fm.files[ino].nlink--;
+    if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
+        remove_directory(filemap[ino].name);
+        filemap[ino].nlink--;
     }
-    free(fm.files[ino].name);
-    free(fm.files[ino].data);
-    free(fm.files[ino].dir);
-    fm.files[ino].ffree = 0;
-    fm.ffree = ino;
+
+    free(filemap[ino].name);
+    free(filemap[ino].data);
+    free(filemap[ino].dir);
+    filemap[ino].ffree = 0;
+
+    if (ino < frmp.currfree) {
+        frmp.nextfr[ino] = frmp.currfree;
+        frmp.currfree = ino;
+    } else {
+        ino_t curr = frmp.nextfr[frmp.currfree];
+        ino_t prev = frmp.currfree;
+        while (curr < ino) {
+            prev = curr;
+            curr = frmp.nextfr[curr];
+        }
+        frmp.nextfr[ino] = curr;
+        frmp.nextfr[prev] = ino;
+    }
     return ino;
 }
 
@@ -213,17 +232,23 @@ void fatal_error(const char *message) {
 
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
-    fm.ffree = 1; //init to inode 1
-    fm.files = malloc(10*MAX_FILES*sizeof(struct file_map));
+    filemap = calloc(10*MAX_FILES, sizeof(struct file_info));
+
+    frmp.currfree = 1; //init to inode 1
+    frmp.nextfr = calloc(10*MAX_FILES, sizeof(ino_t));
+    for (int i = 0; i < 10*MAX_FILES; i++) {
+        frmp.nextfr[i] = i+1;
+    }
+
     dirh = kh_init(dirhash);
     opendirh = kh_init(opendirhash);
 
     add_file(0x0, 0x0, strdup("/"), S_IFDIR);
 
     //root directory shouldn't contain itself
-    fm.files[1].dir[0] = 0;
-    fm.files[1].ffree = 0;
-    khint_t k = kh_get(dirhash, dirh, fm.files[1].name);
+    filemap[1].dir[0] = 0;
+    filemap[1].ffree = 0;
+    khint_t k = kh_get(dirhash, dirh, filemap[1].name);
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_val(dirh, k);
         dir->files[0] = 0;
@@ -236,6 +261,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 }
 
 static void smt_destroy(void *userdata) {
+
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
             struct opendirinfo* dir = kh_val(opendirh, k);
@@ -253,12 +279,13 @@ static void smt_destroy(void *userdata) {
         }
     kh_destroy(dirhash, dirh);
 
-    for (int i = 1; i < fm.ffree; i++) {
-        free(fm.files[i].name);
-        free(fm.files[i].data);
-        free(fm.files[i].dir);
+    free(frmp.nextfr);
+    for (int i = 1; i < frmp.currfree; i++) {
+        free(filemap[i].name);
+        free(filemap[i].data);
+        free(filemap[i].dir);
     }
-    free(fm.files);
+    free(filemap);
 
     printf("smt_destroy: Finished cleanup\n");
 }
@@ -296,13 +323,13 @@ void dirset(const char* name, const char *pos) {
             if (map[i] != 2) {
                 map[i] = 0;
             } else {
-                printf("%s\n", fm.files[i].name);
+                printf("%s\n", filemap[i].name);
             }
         }
     } else if (name[(pos-name)+1] == '|') {
         for (int i = 1; i < MAX_FILES*10; i++) {
             if (map[i] > 0) {
-                printf("%s\n", fm.files[i].name);
+                printf("%s\n", filemap[i].name);
             }
         }
     } else if (name[(pos-name)+1] == '^') {
@@ -310,7 +337,7 @@ void dirset(const char* name, const char *pos) {
             if (map[i] != 1) {
                 map[i] = 0;
             } else {
-                printf("%s\n", fm.files[i].name);
+                printf("%s\n", filemap[i].name);
             }
         }
     }
@@ -338,7 +365,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < MAX_FILES; i++) {
             if (!strncmp(opendir->filenames[i], name, strlen(name))) {
-                struct file_info f = fm.files[opendir->fileinos[i]];
+                struct file_info f = filemap[opendir->fileinos[i]];
                 e.ino = f.ino;
                 e.attr.st_ino = f.ino;
                 e.attr.st_mode = f.mode;
@@ -354,12 +381,12 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 }
 
 /*static void smt_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
-    fm.files[ino].nlink -= nlookup;
-    if (!fm.files[ino].nlink) {
-        free(fm.files[ino].name);
-        free(fm.files[ino].data);
-        free(fm.files[ino].dir);
-        fm.files[ino] = 0; //curr free and next free
+    filemap[ino].nlink -= nlookup;
+    if (!filemap[ino].nlink) {
+        free(filemap[ino].name);
+        free(filemap[ino].data);
+        free(filemap[ino].dir);
+        filemap[ino] = 0; //curr free and next free
     }
 }*/
 
@@ -367,8 +394,8 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
 {
     struct stat stbuf;
 
-    if (fm.ffree > ino) {
-        struct file_info f = fm.files[ino];
+    if (frmp.currfree > ino) {
+        struct file_info f = filemap[ino];
         stbuf.st_mode = f.mode;
         stbuf.st_nlink = f.nlink;
         stbuf.st_size = f.size;
@@ -383,15 +410,15 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
 {
     struct stat stbuf;
 
-    if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
+    if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
         return;
     }
 
     stbuf.st_ino = ino;
-    stbuf.st_mode = fm.files[ino].mode;
-    stbuf.st_nlink = fm.files[ino].nlink;
-    stbuf.st_size = fm.files[ino].size;
+    stbuf.st_mode = filemap[ino].mode;
+    stbuf.st_nlink = filemap[ino].nlink;
+    stbuf.st_size = filemap[ino].size;
 
     if (to_set & FUSE_SET_ATTR_ATIME) {
         stbuf.st_atime = attr->st_atime;
@@ -433,10 +460,10 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     // if ino > max_file * 10 its a set op
     struct dirinfo *dir = NULL;
     khint_t k;
-    k = kh_get(dirhash, dirh, fm.files[ino].name);
+    k = kh_get(dirhash, dirh, filemap[ino].name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
-        printf("found directory -> %ld\n", ino);
+        printf("ropendir: found directory -> %ld\n", ino);
     }
 
     k = add_opendir(ino);
@@ -444,8 +471,8 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     if (k != kh_end(opendirh) && dir != NULL) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < dir->ffree; i++) {
-            struct file_info f = fm.files[dir->files[i]];
-            printf("found file -> %ld at %d\n", dir->files[i], i);
+            struct file_info f = filemap[dir->files[i]];
+            printf("ropendir: found file -> %ld at %d\n", dir->files[i], i);
             char* name;
             char app[3] = {'~', '0', '\0'};
                 if ((name = malloc(strlen(f.name)+strlen(app)+1)) != NULL){
@@ -514,11 +541,11 @@ void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 
 static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-    if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
+    if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
     } else {
         //char path[256];
-        //sprintf(path, "%s/*/%s", devfile, fm.files[ino].name);
+        //sprintf(path, "%s/*/%s", devfile, filemap[ino].name);
         /*int fd = open(path, fi->flags & ~O_NOFOLLOW);
         if (fd == -1)
             return (void) fuse_reply_err(req, errno);
@@ -535,19 +562,19 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
 
     khint_t k = kh_get(dirhash, dirh, name); //make sure the name isn't already present
 
-    if (fm.ffree < MAX_FILES && k == kh_end(dirh)) {
+    if (frmp.currfree < MAX_FILES && k == kh_end(dirh)) {
         ino_t ino = add_file(0x0, 0x0, name, S_IFDIR);
         ropendir(NULL, NULL, 1, 0);
         if (parent != 1) {
-            add_filetodir(fm.files[parent].name, ino);
+            add_filetodir(filemap[parent].name, ino);
             ropendir(NULL, NULL, parent, 0);
         }
 
         e.ino = ino;
         e.attr.st_ino = ino;
-        e.attr.st_mode = fm.files[ino].mode;
-        e.attr.st_nlink = fm.files[ino].nlink;
-        e.attr.st_size = fm.files[ino].size;
+        e.attr.st_mode = filemap[ino].mode;
+        e.attr.st_nlink = filemap[ino].nlink;
+        e.attr.st_size = filemap[ino].size;
 
         fuse_reply_entry(req, &e);
         return;
@@ -572,7 +599,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < MAX_FILES; i++) {
             if (!strncmp(opendir->filenames[i], name, strlen(name))) {
-                struct file_info *f = &fm.files[opendir->fileinos[i]];
+                struct file_info *f = &filemap[opendir->fileinos[i]];
                 strncpy(f->name, newname, strlen(newname));
                 f->name[strlen(newname)] = 0x0;
                 strncpy(opendir->filenames[i], newname, strlen(newname));
@@ -595,24 +622,24 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
 
     struct dirinfo *dir;
     khint_t k;
-    k = kh_get(dirhash, dirh, fm.files[parent].name);
+    k = kh_get(dirhash, dirh, filemap[parent].name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
     }
 
-    if (fm.ffree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
+    if (frmp.currfree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
         ino_t ino = add_file(strlen("dummy"), strdup("dummy"), name, mode);
         ropendir(NULL, NULL, 2, 0);
         if (parent != 2) {
-            add_filetodir(fm.files[parent].name, ino);
+            add_filetodir(filemap[parent].name, ino);
             ropendir(NULL, NULL, parent, 0);
         }
 
         e.ino = ino;
         e.attr.st_ino = ino;
-        e.attr.st_mode = fm.files[ino].mode;
-        e.attr.st_nlink = fm.files[ino].nlink;
-        e.attr.st_size = fm.files[ino].size;
+        e.attr.st_mode = filemap[ino].mode;
+        e.attr.st_nlink = filemap[ino].nlink;
+        e.attr.st_size = filemap[ino].size;
 
         fuse_reply_create(req, &e, fi);
         return;
@@ -625,10 +652,10 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
 {
     (void) fi;
 
-    if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
+    if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
-    } else if (ino < fm.ffree) {
-        reply_buf_limited(req, fm.files[ino].data, fm.files[ino].size, off, size);
+    } else if (ino < frmp.currfree) {
+        reply_buf_limited(req, filemap[ino].data, filemap[ino].size, off, size);
         return;
     }
     fuse_reply_err(req, ENOENT);
@@ -645,7 +672,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < MAX_FILES; i++) {
             if (!strncmp(opendir->filenames[i], name, strlen(name))) {
-                struct file_info f = fm.files[opendir->fileinos[i]];
+                struct file_info f = filemap[opendir->fileinos[i]];
                 for (int j = 0; j < MAX_DIR; j++) {
                     //remove inode from every f.dir[i];
                 }
@@ -664,16 +691,16 @@ static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t si
 {
     printf("write called on the file %ld\n", ino);
     printf("offset = %lu and size=%zu\n", off, size);
-    if ((fm.files[ino].mode & S_IFMT) == S_IFDIR) {
+    if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
-    } else if (ino < fm.ffree) {
-        if (fm.files[ino].size == 0) {
-            fm.files[ino].data = malloc(size + off);
+    } else if (ino < frmp.currfree) {
+        if (filemap[ino].size == 0) {
+            filemap[ino].data = malloc(size + off);
         } else {
-            fm.files[ino].data = realloc(fm.files[ino].data, off + size);
+            filemap[ino].data = realloc(filemap[ino].data, off + size);
         }
-        fm.files[ino].size = off + size;
-        memcpy(fm.files[ino].data + off, buf, size);
+        filemap[ino].size = off + size;
+        memcpy(filemap[ino].data + off, buf, size);
         fuse_reply_write(req, size);
         return;
     }
@@ -700,7 +727,7 @@ static void smt_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
 	int res;
 	struct statvfs stbuf;
 
-	res = fstatvfs(fm.files[ino].fd, &stbuf);
+	res = fstatvfs(filemap[ino].fd, &stbuf);
 	if (res == -1)
 		fuse_reply_err(req, errno);
 	else
@@ -711,21 +738,21 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 {
 	char *value = NULL;
     ssize_t ret = 0;
-    struct file_info f = fm.files[ino];
+    struct file_info f = filemap[ino];
 
     if (size) {
         value = malloc(size);
         for (int i = 0; i < f.ffree; i++) {
-            printf("%s %ld\n", fm.files[f.dir[i]].name, size);
+            printf("%s %ld\n", filemap[f.dir[i]].name, size);
             //strcat
-            strncpy(value, fm.files[f.dir[i]].name, strlen(fm.files[f.dir[i]].name));
+            strncpy(value, filemap[f.dir[i]].name, strlen(filemap[f.dir[i]].name));
             printf("value %ld\n", sizeof(value));
-            value[strlen(fm.files[f.dir[i]].name)] = 0x0;
+            value[strlen(filemap[f.dir[i]].name)] = 0x0;
         }
 		fuse_reply_buf(req, value, ret);
     } else {
         for (int i = 0; i < f.ffree; i++) {
-            ret += sizeof(fm.files[f.dir[i]].name);
+            ret += sizeof(filemap[f.dir[i]].name);
         }
         printf("ret %ld\n", ret);
 		fuse_reply_xattr(req, ret);
@@ -741,8 +768,8 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
 
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_value(dirh, k);
-        for (int i = 0; i < fm.files[ino].ffree; i++) {
-            if (fm.files[ino].dir[i] == dir->ino) {
+        for (int i = 0; i < filemap[ino].ffree; i++) {
+            if (filemap[ino].dir[i] == dir->ino) {
                 saverr = -1;
                 break;
             }
@@ -763,16 +790,17 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_value(dirh, k);
-        for (int i = 0; i < fm.files[ino].ffree; i++) {
-            if (fm.files[ino].dir[i] == dir->ino) {
+        for (int i = 0; i < filemap[ino].ffree; i++) {
+            if (filemap[ino].dir[i] == dir->ino) {
                 saverr = 0;
                 break;
             }
         }
-            //remove_filefromdir(name, ino);
-            //remove from fm.files[ino].dir
-            //remove from dir.files
-            //ropenr if present in opendirh
+        remove_filefromdir(name, ino);
+        k = kh_get(opendirhash, opendirh, dir->ino);
+        if (k != kh_end(opendirh)) {
+            ropendir(NULL, NULL, dir->ino, 0);
+        }
     } else {
         saverr = -1;
     }
