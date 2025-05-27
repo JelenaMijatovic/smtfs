@@ -151,7 +151,7 @@ int remove_directory(const char* name) {
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
-        for (int i = 0; i <- MAX_FILES; i++) {
+        for (int i = 0; i < MAX_FILES; i++) {
             if (dir->files[i]) {
                 remove_filefromdir(name, dir->files[i]);
             }
@@ -634,18 +634,46 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
     khint_t k;
     k = add_opendir(parent);
-    //check if newparent is different and add the file to that one too, but don't remove from old
+
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < MAX_FILES; i++) {
             if (!strncmp(opendir->filenames[i], name, strlen(name))) {
-
                 struct file_info *f = &filemap[opendir->fileinos[i]];
+
+                if ((f->mode & S_IFMT) == S_IFDIR) {
+                    k = kh_get(dirhash, dirh, newname);
+                    if (k != kh_end(dirh)) {
+                        fuse_reply_err(req, EINVAL);
+                        return;
+                    }
+                }
+
+                char *oldname = (char *)malloc(strlen(f->name));
+                strncpy(oldname, f->name, strlen(f->name));
+                printf("%s\n", oldname);
                 strncpy(f->name, newname, strlen(newname));
                 f->name[strlen(newname)] = 0x0;
 
                 strncpy(opendir->filenames[i], newname, strlen(newname));
                 opendir->filenames[i][strlen(newname)] = 0x0;
+
+                if (parent != newparent) {
+                    add_filetodir(filemap[newparent].name, f->ino);
+                    //ropendir
+                }
+
+                if ((f->mode & S_IFMT) == S_IFDIR) {
+                    k = kh_get(dirhash, dirh, oldname);
+                    if (k != kh_end(dirh)) {
+                        printf("%s\n", oldname);
+                        struct dirinfo *olddir = kh_value(dirh, k);
+                        struct dirinfo *newdir = add_directory(olddir->ino, f->name, olddir->dironly);
+                        newdir->ffree = olddir->ffree;
+                        newdir->files = olddir->files;
+                        remove_directory(oldname);
+                    }
+                }
 
                 res = 0;
                 break;
@@ -724,7 +752,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
                 struct file_info f = filemap[opendir->fileinos[i]];
                 remove_filefromdir(filemap[parent].name, f.ino);
                 ropendir(NULL, NULL, parent, 0);
-                if (parent == 2) { //if unlinking from *, unlink everywhere
+                if (parent == 2) { //if unlinking from *, unlink from everywhere and free file
                     remove_file(f.ino);
                 }
                 res = 0;
@@ -750,10 +778,10 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
             if (k != kh_end(opendirh)) {
                 ropendir(NULL, NULL, parent, 0);
             }
-            if (parent == 1) { //if unlinking from /, unlink everywhere
+            if (parent == 1) { //if unlinking from /, unlink everywhere. The fs will call forget() next
                 struct file_info f = filemap[dir->ino];
-                for (int j = 1; j < MAX_DIR; j++) {
-                    if (f.dir[j] != 0) {
+                for (int j = 0; j < MAX_DIR; j++) {
+                    if (f.dir[j]) {
                         remove_filefromdir(filemap[f.dir[j]].name, f.ino);
                         k = kh_get(opendirhash, opendirh, f.dir[j]);
                         if (k != kh_end(opendirh)) {
@@ -808,7 +836,7 @@ static void smt_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
 	int res;
 	struct statvfs stbuf;
 
-	res = fstatvfs(filemap[ino].fd, &stbuf);
+	res = statvfs(devfile, &stbuf);
 	if (res == -1)
 		fuse_reply_err(req, errno);
 	else
@@ -825,7 +853,7 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
         value = malloc(size);
         for (int i = 0; i < MAX_DIR; i++) {
             if (f.dir[i]) {
-                printf("%s %ld\n", filemap[f.dir[i]].name, size);
+                printf("%ld %s\n", f.dir[i], filemap[f.dir[i]].name);
                 //strcat
                 strncpy(value, filemap[f.dir[i]].name, strlen(filemap[f.dir[i]].name));
                 printf("value %ld\n", sizeof(value));
@@ -878,11 +906,11 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
 }
 
 static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
-    int saverr = -1;
+    int saverr = EPERM;
     khint_t k;
     //don't allow removing the universals tags / and *
     if (ino < 3) {
-        fuse_reply_err(req, EPERM);
+        fuse_reply_err(req, saverr);
         return;
     }
 
@@ -900,8 +928,6 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
         if (k != kh_end(opendirh)) {
             ropendir(NULL, NULL, dir->ino, 0);
         }
-    } else {
-        saverr = -1;
     }
 
 	fuse_reply_err(req, saverr);
