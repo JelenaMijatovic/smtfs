@@ -505,23 +505,28 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
             if (dir->files[i]) {
                 struct file_info f = filemap[dir->files[i]];
                 printf("ropendir: found file -> %ld at %d\n", dir->files[i], i);
-                char* name;
-                char app[3] = {'~', '0', '\0'};
-                if ((name = malloc(strlen(f.name)+strlen(app)+1)) != NULL){
+                char *name;
+                char *app = "~0";
+                if ((name = malloc(MAX_FILENAME_LEN)) != NULL){
                     for (int j = 0; j < i; j++) {
-                        int k = 1;
-                        if (!strcmp(opendir->filenames[j], name)) {
-                            name[0] = '\0';
-                            app[1] = k + '0';
-                            strcat(name,f.name);
-                            strcat(name, app);
-                            k++;
+                        if (f.dir[j]) {
+                            int k = 1;
+                            if (!strncmp(opendir->filenames[j], f.name, strlen(f.name))) {
+                                name[0] = '\0';
+                                app[1] = k + '0';
+                                strcat(name, f.name);
+                                printf("%s %s\n", name, app);
+                                strcat(name, app);
+                                k++;
+                            }
                         }
                     }
                     if (app[1] != '0') {
-                        strcpy(opendir->filenames[i], name);
+                        strncpy(opendir->filenames[i], name, strlen(name));
+                        opendir->filenames[i][strlen(name)] = '\0';
                     } else {
-                        strcpy(opendir->filenames[i], f.name);
+                        strncpy(opendir->filenames[i], f.name, strlen(f.name));
+                        opendir->filenames[i][strlen(f.name)] = '\0';
                     }
                     free(name);
                 } else {
@@ -640,6 +645,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
         for (int i = 0; i < MAX_FILES; i++) {
             if (!strncmp(opendir->filenames[i], name, strlen(name))) {
                 struct file_info *f = &filemap[opendir->fileinos[i]];
+                struct dirinfo *olddir = NULL;
 
                 if ((f->mode & S_IFMT) == S_IFDIR) {
                     k = kh_get(dirhash, dirh, newname);
@@ -647,13 +653,22 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                         fuse_reply_err(req, EINVAL);
                         return;
                     }
+
+                    k = kh_get(dirhash, dirh, name);
+                    if (k != kh_end(dirh)) {
+                        olddir = kh_value(dirh, k);
+                    }
                 }
 
-                char *oldname = (char *)malloc(strlen(f->name));
-                strncpy(oldname, f->name, strlen(f->name));
-                printf("%s\n", oldname);
                 strncpy(f->name, newname, strlen(newname));
                 f->name[strlen(newname)] = 0x0;
+
+                if ((f->mode & S_IFMT) == S_IFDIR) {
+                    struct dirinfo *newdir = add_directory(olddir->ino, f->name, olddir->dironly);
+                    newdir->ffree = olddir->ffree;
+                    newdir->files = olddir->files;
+                    remove_directory(name);
+                }
 
                 strncpy(opendir->filenames[i], newname, strlen(newname));
                 opendir->filenames[i][strlen(newname)] = 0x0;
@@ -661,18 +676,6 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                 if (parent != newparent) {
                     add_filetodir(filemap[newparent].name, f->ino);
                     //ropendir
-                }
-
-                if ((f->mode & S_IFMT) == S_IFDIR) {
-                    k = kh_get(dirhash, dirh, oldname);
-                    if (k != kh_end(dirh)) {
-                        printf("%s\n", oldname);
-                        struct dirinfo *olddir = kh_value(dirh, k);
-                        struct dirinfo *newdir = add_directory(olddir->ino, f->name, olddir->dironly);
-                        newdir->ffree = olddir->ffree;
-                        newdir->files = olddir->files;
-                        remove_directory(oldname);
-                    }
                 }
 
                 res = 0;
