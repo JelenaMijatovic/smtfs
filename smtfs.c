@@ -494,7 +494,6 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     k = kh_get(dirhash, dirh, filemap[ino].name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
-        printf("ropendir: found directory -> %ld\n", ino);
     }
 
     k = add_opendir(ino);
@@ -506,16 +505,15 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                 struct file_info f = filemap[dir->files[i]];
                 printf("ropendir: found file -> %ld at %d\n", dir->files[i], i);
                 char *name;
-                char *app = "~0";
+                char app[3] = "~0";
                 if ((name = malloc(MAX_FILENAME_LEN)) != NULL){
+                    int k = 1;
                     for (int j = 0; j < i; j++) {
-                        if (f.dir[j]) {
-                            int k = 1;
-                            if (!strncmp(opendir->filenames[j], f.name, strlen(f.name))) {
+                        if (dir->files[j]) {
+                            if (!strncmp(filemap[dir->files[j]].name, f.name, strlen(f.name))) {
                                 name[0] = '\0';
                                 app[1] = k + '0';
                                 strcat(name, f.name);
-                                printf("%s %s\n", name, app);
                                 strcat(name, app);
                                 k++;
                             }
@@ -533,9 +531,9 @@ void ropendir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                     strcpy(opendir->filenames[i], f.name);
                 }
                 opendir->fileinos[i] = f.ino;
-                printf("Adding entry for filename -> %s | inode -> %ld\n", f.name, f.ino);
                 if (addbuff) {
-                    dirbuf_add(req, b, f.name, f.ino);
+                    printf("Adding entry for filename -> %s | inode -> %ld\n", opendir->filenames[i], opendir->fileinos[i]);
+                    dirbuf_add(req, b, opendir->filenames[i], opendir->fileinos[i]);
                 }
             }
         }
@@ -854,13 +852,16 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 
     if (size) {
         value = malloc(size);
+        ret = sizeof(value);
+        char *p = value;
         for (int i = 0; i < MAX_DIR; i++) {
             if (f.dir[i]) {
-                printf("%ld %s\n", f.dir[i], filemap[f.dir[i]].name);
-                //strcat
-                strncpy(value, filemap[f.dir[i]].name, strlen(filemap[f.dir[i]].name));
-                printf("value %ld\n", sizeof(value));
-                value[strlen(filemap[f.dir[i]].name)] = 0x0;
+                printf("%ld\n", f.dir[i]);
+                printf("%s\n", filemap[f.dir[i]].name);
+                //strcat(value, filemap[f.dir[i]].name);
+                p = memccpy(p, filemap[f.dir[i]].name, '\0', strlen(filemap[f.dir[i]].name));
+                //strncpy(value, filemap[f.dir[i]].name, strlen(filemap[f.dir[i]].name));
+                printf("value %s\n", value);
             }
         }
 		fuse_reply_buf(req, value, ret);
