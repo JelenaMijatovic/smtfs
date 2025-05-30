@@ -167,7 +167,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
     if (frmp.currfree < MAX_FILES*10) {
         filemap[frmp.currfree].ino = frmp.currfree;
         filemap[frmp.currfree].name = (char *)malloc(MAX_FILENAME_LEN);
-        strncpy(filemap[frmp.currfree].name, name, strlen(name));
+        strncpy(filemap[frmp.currfree].name, name, strlen(name)+1);
         filemap[frmp.currfree].name[strlen(name)] = 0x0;
         filemap[frmp.currfree].size = size;
         filemap[frmp.currfree].data = data;
@@ -278,6 +278,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     khint_t k = kh_get(dirhash, dirh, filemap[1].name);
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_val(dirh, k);
+        dir->dironly = 1;
         dir->files[0] = 0;
         dir->ffree = 0;
     } else {
@@ -332,11 +333,13 @@ void dirset(const char* name, const char *pos) {
     khint_t k = kh_get(dirhash, dirh, dir1);
     if (k != kh_end(dirh)) {
         d1 = kh_val(dirh, k);
+        printf("%s\n", filemap[d1->ino].name);
     }
     struct dirinfo *d2;
     k = kh_get(dirhash, dirh, dir2);
     if (k != kh_end(dirh)) {
         d2 = kh_val(dirh, k);
+        printf("%s\n", filemap[d2->ino].name);
     }
 
     char map[MAX_FILES*10] = {0};
@@ -385,7 +388,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     khint_t k;
 
     memset(&e, 0, sizeof(e));
-    char const *pos = strstr(name, "\\");
+    char const *pos = strchr(name, '\\');
     if (pos != NULL && (pos-name)+1 != strlen(name)) {
         dirset(name, pos);
     }
@@ -698,9 +701,9 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
     }
-
+    printf("%d\n", dir->dironly);
     if (frmp.currfree < MAX_FILES*10 && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
-        ino_t ino = add_file(strlen("dummy"), strdup("dummy"), name, mode);
+        ino_t ino = add_file(strlen("dummy")+1, strdup("dummy"), name, mode);
 
         k = kh_get(opendirhash, opendirh, 2);
         if (k != kh_end(opendirh))
@@ -723,7 +726,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
         return;
     }
 
-    fuse_reply_err(req, ENOSPC);
+    fuse_reply_err(req, EPERM);
 }
 
 static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
@@ -853,24 +856,23 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
     if (size) {
         value = malloc(size);
         ret = sizeof(value);
+        printf("value %ld %ld\n", sizeof(value), ret);
         char *p = value;
         for (int i = 0; i < MAX_DIR; i++) {
             if (f.dir[i]) {
                 printf("%ld\n", f.dir[i]);
                 printf("%s\n", filemap[f.dir[i]].name);
-                //strcat(value, filemap[f.dir[i]].name);
-                p = memccpy(p, filemap[f.dir[i]].name, '\0', strlen(filemap[f.dir[i]].name));
-                //strncpy(value, filemap[f.dir[i]].name, strlen(filemap[f.dir[i]].name));
-                printf("value %s\n", value);
+                p = memccpy(p, filemap[f.dir[i]].name, '\0', strlen(filemap[f.dir[i]].name)+1);
             }
         }
 		fuse_reply_buf(req, value, ret);
     } else {
         for (int i = 0; i < MAX_DIR; i++) {
             if (f.dir[i]) {
-                ret += sizeof(filemap[f.dir[i]].name);
+                ret += strlen(filemap[f.dir[i]].name)+1;
             }
         }
+        ret += 8 - (ret%8);
         printf("ret %ld\n", ret);
 		fuse_reply_xattr(req, ret);
     }
