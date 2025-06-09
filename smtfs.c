@@ -1,8 +1,9 @@
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 17)
 
-#define MAX_FILES 10
-#define MAX_DIR 10
-#define MAX_OPEN 10
+#define MAX_FILES 1000
+#define MAX_CSIZE 100
+#define MAX_DIR 100
+#define MAX_OPEN 100
 #define MAX_FILENAME_LEN 256
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
@@ -20,6 +21,11 @@
 #include <sys/xattr.h>
 
 const char *devfile = NULL;
+
+struct fileino {
+    ino_t ino;
+    struct fileino *next;
+};
 
 struct file_info
 {
@@ -46,8 +52,7 @@ struct freemap frmp;
 struct dirinfo {
     ino_t ino;
     bool dironly;
-    int ffree;
-    ino_t *files; //set of inodes
+    struct fileino *files; //MAX_CSIZE cut of files
 };
 
 KHASH_MAP_INIT_STR(dirhash, struct dirinfo*)
@@ -64,8 +69,7 @@ struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
         dir = malloc(sizeof(struct dirinfo*));
         dir->ino = ino;
         dir->dironly = dironly;
-        dir->ffree = 0;
-        dir->files = calloc(MAX_FILES, sizeof(ino_t));
+        dir->files = calloc(MAX_CSIZE, sizeof(struct fileino));
         k = kh_put(dirhash, dirh, filemap[ino].name, &absent);
         kh_val(dirh, k) = dir;
         //if (absent) kh_key(dirh, k) = strdup(dir->name);
@@ -85,17 +89,10 @@ int add_filetodir(const char* name, ino_t ino) {
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
-        if (dir->ffree < MAX_FILES) {
-            dir->files[dir->ffree] = ino;
-            for (i = dir->ffree+1; i < MAX_FILES; i++) {
-                if (!dir->files[i]) {
-                    dir->ffree = i;
-                    break;
-                }
-            }
-            if (i == MAX_FILES) {
-                dir->ffree = MAX_FILES;
-            }
+        printf("%ld %ld %ld\n", ino, (ino-1)%MAX_CSIZE, dir->files[(ino-1)%MAX_CSIZE].ino);
+        if (!dir->files[(ino-1)%MAX_CSIZE].ino) {
+            dir->files[(ino-1)%MAX_CSIZE].ino = ino;
+            dir->files[(ino-1)%MAX_CSIZE].next = NULL;
 
             filemap[ino].dir[filemap[ino].ffree] = dir->ino;
             for (i = filemap[ino].ffree+1; i < MAX_DIR; i++) {
@@ -109,8 +106,21 @@ int add_filetodir(const char* name, ino_t ino) {
             }
 
             filemap[ino].nlink++;
-            printf("adding file %ld with nlink %ld\n", ino, filemap[ino].nlink);
-            return dir->ffree;
+            printf("adding ino %ld\n", ino);
+            return ino;
+        } else {
+            struct fileino *node = &dir->files[(ino-1)%MAX_CSIZE];
+            int i = 1;
+            while (node->next != NULL) {
+                node = node->next;
+                i++;
+            }
+            node->next = malloc(sizeof(struct fileino));
+            node->next->ino = ino;
+            node->next->next = NULL;
+            filemap[ino].nlink++;
+            printf("adding ino %ld at node %d\n", ino, i);
+            return ino;
         }
     }
 
@@ -124,19 +134,41 @@ int remove_filefromdir(const char *name, ino_t ino) {
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
-        for (int i = 0; i < MAX_FILES; i++) {
-            if (dir->files[i] == ino) {
-                dir->files[i] = 0;
-                dir->ffree = i;
-                for (int j = 0; j < MAX_DIR; j++) {
-                    if (filemap[ino].dir[j] == dir->ino) {
-                        filemap[ino].dir[j] = 0;
-                        filemap[ino].ffree = j;
-                        filemap[ino].nlink--;
-                        break;
-                    }
+        if (dir->files[(ino-1)%MAX_CSIZE].ino == ino) {
+            if (dir->files[(ino-1)%MAX_CSIZE].next) {
+                struct fileino *node = dir->files[(ino-1)%MAX_CSIZE].next;
+                dir->files[(ino-1)%MAX_CSIZE] = *(dir->files[(ino-1)%MAX_CSIZE].next);
+                free(node);
+            } else {
+                dir->files[(ino-1)%MAX_CSIZE].ino = 0;
+            }
+            for (int j = 0; j < MAX_DIR; j++) {
+                if (filemap[ino].dir[j] == dir->ino) {
+                    filemap[ino].dir[j] = 0;
+                    filemap[ino].ffree = j;
+                    filemap[ino].nlink--;
+                    break;
                 }
-                break;
+            }
+        } else {
+            struct fileino *prev = &dir->files[(ino-1)%MAX_CSIZE];
+            struct fileino *node = prev->next;
+            while (node) {
+                if (node->ino == ino) {
+                    prev->next = node->next;
+                    free(node);
+                    for (int j = 0; j < MAX_DIR; j++) {
+                        if (filemap[ino].dir[j] == dir->ino) {
+                            filemap[ino].dir[j] = 0;
+                            filemap[ino].ffree = j;
+                            filemap[ino].nlink--;
+                            break;
+                        }
+                    }
+                    break;
+                }
+                prev = node;
+                node = node->next;
             }
         }
     }
@@ -152,9 +184,9 @@ int remove_directory(const char* name) {
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
-        for (int i = 0; i < MAX_FILES; i++) {
-            if (dir->files[i]) {
-                remove_filefromdir(name, dir->files[i]);
+        for (int i = 0; i < MAX_CSIZE; i++) {
+            if (dir->files[i].ino) {
+                remove_filefromdir(name, dir->files[i].ino);
             }
         }
         free(dir->files);
@@ -165,7 +197,7 @@ int remove_directory(const char* name) {
 
 int add_file(size_t size, char *data, const char *name, mode_t mode) {
 
-    if (frmp.currfree < MAX_FILES*10) {
+    if (frmp.currfree < MAX_FILES) {
         filemap[frmp.currfree].ino = frmp.currfree;
         filemap[frmp.currfree].name = (char *)malloc(MAX_FILENAME_LEN);
         strncpy(filemap[frmp.currfree].name, name, strlen(name)+1);
@@ -229,13 +261,18 @@ int remove_file(ino_t ino) {
 
 struct opendirinfo {
     ino_t ino;
-    //int visits;
     ino_t *fileinos;
     char **filenames; //filename-inode hashmap
 };
 
+struct visit_freq {
+    ino_t ino;
+    int visits;
+};
+
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
-khash_t(opendirhash) *opendirh; //cache method
+khash_t(opendirhash) *opendirh;
+struct visit_freq *vfreq;
 
 khint_t add_opendir(ino_t ino) {
 
@@ -249,12 +286,13 @@ khint_t add_opendir(ino_t ino) {
         }
         struct opendirinfo *dir = malloc(sizeof(struct opendirinfo*));
         dir->ino = ino;
-        //dir->visits = 1;
         dir->fileinos = calloc(MAX_FILES, sizeof(ino_t));
         dir->filenames = malloc(MAX_FILES*sizeof(int *));
         for (int i = 0; i < MAX_FILES; i++) {
             dir->filenames[i] = (char *)malloc(MAX_FILENAME_LEN);
         }
+        vfreq[ino].ino = ino;
+        vfreq[ino].visits = 1;
         k = kh_put(opendirhash, opendirh, ino, &absent);
         kh_val(opendirh, k) = dir;
     }
@@ -273,16 +311,17 @@ void fatal_error(const char *message) {
 
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
-    filemap = calloc(10*MAX_FILES, sizeof(struct file_info));
+    filemap = calloc(MAX_FILES, sizeof(struct file_info));
 
     frmp.currfree = 1; //init to inode 1
-    frmp.nextfr = calloc(10*MAX_FILES, sizeof(ino_t));
-    for (int i = 0; i < 10*MAX_FILES; i++) {
+    frmp.nextfr = calloc(MAX_FILES, sizeof(ino_t));
+    for (int i = 0; i < MAX_FILES; i++) {
         frmp.nextfr[i] = i+1;
     }
 
     dirh = kh_init(dirhash);
     opendirh = kh_init(opendirhash);
+    vfreq = calloc(MAX_FILES, sizeof(struct visit_freq));
 
     add_file(0x0, 0x0, strdup("/"), S_IFDIR);
 
@@ -293,8 +332,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_val(dirh, k);
         dir->dironly = 1;
-        dir->files[0] = 0;
-        dir->ffree = 0;
+        dir->files[0].ino = 0;
     } else {
         fatal_error("Couldn't find root directory in hash");
     }
@@ -315,10 +353,19 @@ static void smt_destroy(void *userdata) {
             free(dir);
         }
     kh_destroy(opendirhash, opendirh);
+    free(vfreq);
 
     for (khint_t k = 0; k < kh_end(dirh); ++k)
         if (kh_exist(dirh, k)) {
             struct dirinfo* dir = kh_val(dirh, k);
+            for (int i = 0; i < MAX_CSIZE; i++) {
+                struct fileino *next = dir->files[i].next;
+                while (next) {
+                    struct fileino *node = next;
+                    next = next->next;
+                    free(node);
+                }
+            }
             free(dir->files);
             free(dir);
             //free((char*)kh_key(dirh, k));
@@ -326,7 +373,7 @@ static void smt_destroy(void *userdata) {
     kh_destroy(dirhash, dirh);
 
     free(frmp.nextfr);
-    for (int i = 1; i < MAX_FILES*10; i++) {
+    for (int i = 1; i < MAX_FILES; i++) {
         if (filemap[i].ino) {
             free(filemap[i].name);
             free(filemap[i].data);
@@ -360,18 +407,18 @@ void dirset(const char* name, const char *pos) {
         printf("%s\n", filemap[d2->ino].name);
     }
 
-    char map[MAX_FILES*10] = {0};
+    char map[MAX_FILES] = {0};
     for (int i = 0; i < MAX_FILES; i++) {
-        if (!d1->files[i])
-            map[d1->files[i]]++;
+        if (!d1->files[i].ino) //and nodes
+            map[d1->files[i].ino]++;
     }
     for (int i = 0; i < MAX_FILES; i++) {
-        if (!d2->files[i])
-            map[d2->files[i]]++;
+        if (!d2->files[i].ino)
+            map[d2->files[i].ino]++;
     }
 
     if (name[(pos-name)+1] == '&') {
-        for (int i = 1; i < MAX_FILES*10; i++) {
+        for (int i = 1; i < MAX_FILES; i++) {
             if (map[i] != 2) {
                 map[i] = 0;
             } else {
@@ -379,13 +426,13 @@ void dirset(const char* name, const char *pos) {
             }
         }
     } else if (name[(pos-name)+1] == '|') {
-        for (int i = 1; i < MAX_FILES*10; i++) {
+        for (int i = 1; i < MAX_FILES; i++) {
             if (map[i] > 0) {
                 printf("%s\n", filemap[i].name);
             }
         }
     } else if (name[(pos-name)+1] == '^') {
-        for (int i = 1; i < MAX_FILES*10; i++) {
+        for (int i = 1; i < MAX_FILES; i++) {
             if (map[i] != 1) {
                 map[i] = 0;
             } else {
@@ -416,7 +463,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < MAX_FILES; i++) {
-            if (opendir->fileinos && !strncmp(opendir->filenames[i], name, strlen(name))) {
+            if (opendir->fileinos[i] && !strncmp(opendir->filenames[i], name, strlen(name))) {
                 struct file_info f = filemap[opendir->fileinos[i]];
                 e.ino = f.ino;
                 e.attr.st_ino = f.ino;
@@ -493,17 +540,14 @@ struct dirbuf {
 
 static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino)
 {
-    printf("test in dirbufadd\n");
 	struct stat stbuf;
 	size_t oldsize = b->size;
 
-	printf("%ld %s\n", b->size, name);
 	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
 	b->p = (char *) realloc(b->p, b->size);
 	memset(&stbuf, 0, sizeof(stbuf));
 	stbuf.st_ino = ino;
 	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, b->size);
-	printf("exit dirbufadd\n");
 }
 
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
@@ -522,40 +566,51 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     if (k != kh_end(opendirh) && dir != NULL) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         memset(opendir->fileinos, 0, MAX_FILES*sizeof(ino_t));
-        for (int i = 0; i < MAX_FILES; i++) {
-            if (dir->files[i]) {
-                struct file_info f = filemap[dir->files[i]];
-                printf("refreshdir: found file -> %ld at %d\n", dir->files[i], i);
-                char *name;
-                char app[3] = "~0";
-                if ((name = malloc(MAX_FILENAME_LEN)) != NULL){
-                    int k = 1;
-                    for (int j = 0; j < i; j++) {
-                        if (dir->files[j]) {
-                            if (!strncmp(filemap[dir->files[j]].name, f.name, strlen(f.name))) {
-                                name[0] = '\0';
-                                app[1] = k + '0';
-                                strcat(name, f.name);
-                                strcat(name, app);
-                                k++;
+        int p = 0;
+        for (int i = 0; i < MAX_CSIZE; i++) {
+            if (dir->files[i].ino) {
+                struct fileino *node = &dir->files[i];
+                while (node) {
+                    struct file_info f = filemap[node->ino];
+                    printf("refreshdir: found file -> %ld at %d\n", node->ino, i);
+                    char *name;
+                    char app[3] = "~0";
+                    if ((name = malloc(MAX_FILENAME_LEN)) != NULL){
+                        int k = 1;
+                        for (int j = 0; j < i; j++) {
+                            if (dir->files[j].ino) {
+                                struct fileino *nodej = &dir->files[j];
+                                while (nodej) {
+                                    if (!strncmp(filemap[nodej->ino].name, f.name, strlen(f.name))) {
+                                        name[0] = '\0';
+                                        app[1] = k + '0';
+                                        strcat(name, f.name);
+                                        strcat(name, app);
+                                        k++;
+                                    }
+                                    nodej = nodej->next;
+                                }
                             }
                         }
-                    }
-                    if (app[1] != '0') {
-                        strncpy(opendir->filenames[i], name, strlen(name));
-                        opendir->filenames[i][strlen(name)] = '\0';
+                        if (app[1] != '0') {
+                            strncpy(opendir->filenames[p], name, strlen(name));
+                            opendir->filenames[p][strlen(name)] = '\0';
+                        } else {
+                            strncpy(opendir->filenames[p], f.name, strlen(f.name));
+                            opendir->filenames[p][strlen(f.name)] = '\0';
+                        }
+                        free(name);
                     } else {
-                        strncpy(opendir->filenames[i], f.name, strlen(f.name));
-                        opendir->filenames[i][strlen(f.name)] = '\0';
+                        strcpy(opendir->filenames[p], f.name);
                     }
-                    free(name);
-                } else {
-                    strcpy(opendir->filenames[i], f.name);
-                }
-                opendir->fileinos[i] = f.ino;
-                if (addbuff) {
-                    printf("Adding entry for filename -> %s | inode -> %ld\n", opendir->filenames[i], opendir->fileinos[i]);
-                    dirbuf_add(req, b, opendir->filenames[i], opendir->fileinos[i]);
+                    opendir->fileinos[p] = f.ino;
+                    if (addbuff) {
+                        printf("Adding entry for filename -> %s | inode -> %ld\n", opendir->filenames[p], opendir->fileinos[p]);
+                        dirbuf_add(req, b, opendir->filenames[p], opendir->fileinos[p]);
+                    }
+
+                    node = node->next;
+                    p++;
                 }
             }
         }
@@ -620,7 +675,7 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
 
     khint_t k = kh_get(dirhash, dirh, name); //make sure the name isn't already present
 
-    if (frmp.currfree < MAX_FILES*10 && k == kh_end(dirh)) {
+    if (frmp.currfree < MAX_FILES && k == kh_end(dirh)) {
         ino_t ino = add_file(0x0, 0x0, name, S_IFDIR);
 
         k = kh_get(opendirhash, opendirh, 1);
@@ -685,7 +740,6 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
                 if ((f->mode & S_IFMT) == S_IFDIR) {
                     struct dirinfo *newdir = add_directory(olddir->ino, f->name, olddir->dironly);
-                    newdir->ffree = olddir->ffree;
                     newdir->files = olddir->files;
                     remove_directory(name);
                 }
@@ -723,8 +777,8 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     if (k != kh_end(dirh)) {
         dir = kh_val(dirh, k);
     }
-    printf("%d\n", dir->dironly);
-    if (frmp.currfree < MAX_FILES*10 && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
+
+    if (frmp.currfree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
         ino_t ino = add_file(strlen("dummy")+1, strdup("dummy"), name, mode);
 
         k = kh_get(opendirhash, opendirh, 2);
@@ -774,7 +828,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         for (int i = 0; i < MAX_FILES; i++) {
-            if (opendir->fileinos[i] != 0 && !strncmp(opendir->filenames[i], name, strlen(name))) {
+            if (opendir->fileinos[i] && !strncmp(opendir->filenames[i], name, strlen(name))) {
                 struct file_info f = filemap[opendir->fileinos[i]];
                 remove_filefromdir(filemap[parent].name, f.ino);
                 refreshdir(NULL, NULL, parent, 0);
@@ -782,6 +836,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
                     remove_file(f.ino);
                 }
                 res = 0;
+                break;
             }
         }
     }
