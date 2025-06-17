@@ -158,6 +158,7 @@ void remove_ino(struct fileino *fileinos, ino_t ino, int mod) {
             if (node->ino == ino) {
                 prev->next = node->next;
                 free(node);
+                break;
             }
             prev = node;
             node = node->next;
