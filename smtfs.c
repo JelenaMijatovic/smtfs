@@ -10,6 +10,7 @@
 
 #include <fuse3/fuse_lowlevel.h>
 #include "khash.h"
+#include "ksort.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,19 +60,28 @@ KHASH_MAP_INIT_STR(dirhash, struct dirinfo*)
 khash_t(dirhash) *dirh;
 
 struct opendirinfo {
-    ino_t ino;
+    ino_t index;
     ino_t *fileinos;
     char **filenames; //filename-inode hashmap
 };
 
-struct visit_freq {
-    ino_t ino;
-    int visits;
-};
-
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
 khash_t(opendirhash) *opendirh;
-struct visit_freq *vfreq;
+
+struct vst {
+    int visit;
+    int ino;
+};
+
+struct last_visited {
+    int currindex;
+    int currvisit;
+    struct vst *visits; //MAX_OPEN
+};
+
+#define vst_lt(a, b) ((a).visit < (b).visit)
+KSORT_INIT(vst, struct vst, vst_lt);
+struct last_visited lvisit;
 
 struct dirbuf {
 	char *p;
@@ -285,6 +295,23 @@ int remove_file(ino_t ino) {
     return ino;
 }
 
+void remove_opendir(ino_t ino) {
+    khint_t k;
+
+    k = kh_get(opendirhash, opendirh, ino);
+    if (k != kh_end(opendirh)) {
+        struct opendirinfo *opendir = kh_val(opendirh, k);
+        lvisit.currindex = opendir->index;
+        free(opendir->fileinos);
+        for (int i = 0; i < MAX_FILES; i++) {
+            free(opendir->filenames[i]);
+        }
+        free(opendir->filenames);
+        free(opendir);
+        kh_del(opendirhash, opendirh, ino);
+    }
+}
+
 khint_t add_opendir(ino_t ino) {
 
     khint_t k;
@@ -293,26 +320,25 @@ khint_t add_opendir(ino_t ino) {
     k = kh_get(opendirhash, opendirh, ino);
     if (k == kh_end(opendirh)) {
         if (kh_size(opendirh) >= MAX_OPEN) {
-
+            struct vst *visits = lvisit.visits;
+            struct vst t = ks_ksmall(vst, MAX_OPEN, visits, 0);
+            printf("%d %d\n", t.ino, t.visit);
+            remove_opendir(t.ino);
         }
         struct opendirinfo *dir = malloc(sizeof(struct opendirinfo*));
-        dir->ino = ino;
+        dir->index = lvisit.currindex++;
+        lvisit.visits[dir->index].visit = lvisit.currvisit++;
+        lvisit.visits[dir->index].ino = ino;
         dir->fileinos = calloc(MAX_FILES, sizeof(ino_t));
-        dir->filenames = malloc(MAX_FILES*sizeof(int *));
+        dir->filenames = calloc(MAX_FILES, sizeof(int *));
         for (int i = 0; i < MAX_FILES; i++) {
             dir->filenames[i] = (char *)malloc(MAX_FILENAME_LEN);
         }
-        vfreq[ino].ino = ino;
-        vfreq[ino].visits = 1;
         k = kh_put(opendirhash, opendirh, ino, &absent);
         kh_val(opendirh, k) = dir;
     }
 
     return k;
-}
-
-void remove_opendir(ino_t ino) {
-
 }
 
 void fatal_error(const char *message) {
@@ -332,7 +358,9 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     dirh = kh_init(dirhash);
     opendirh = kh_init(opendirhash);
-    vfreq = calloc(MAX_FILES, sizeof(struct visit_freq));
+    lvisit.currindex = 0;
+    lvisit.currvisit = 0;
+    lvisit.visits = calloc(MAX_OPEN, sizeof(struct vst));
 
     add_file(0x0, 0x0, strdup("/"), S_IFDIR);
 
@@ -364,7 +392,7 @@ static void smt_destroy(void *userdata) {
             free(dir);
         }
     kh_destroy(opendirhash, opendirh);
-    free(vfreq);
+    free(lvisit.visits);
 
     for (khint_t k = 0; k < kh_end(dirh); ++k)
         if (kh_exist(dirh, k)) {
@@ -431,6 +459,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
     if (k != kh_end(opendirh) && dir != NULL) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
+        lvisit.visits[opendir->index].visit = lvisit.currvisit++;
         memset(opendir->fileinos, 0, MAX_FILES*sizeof(ino_t));
         int p = 0;
         for (int i = 0; i < MAX_CSIZE; i++) {
