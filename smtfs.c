@@ -379,11 +379,10 @@ khint_t add_opendir(ino_t ino) {
                 k = kh_put(opendirhash, opendirh, ino, &absent);
                 kh_val(opendirh, k) = dir;
                 return k;
-            } else {
-                free(dir->filenames);
-                free(dir->fileinos);
-                free(dir);
             }
+            free(dir->filenames);
+            free(dir->fileinos);
+            free(dir);
         }
     } else {
         return k;
@@ -681,9 +680,10 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
                 e.ino = f.ino;
                 e.attr.st_ino = f.ino;
                 e.attr.st_mode = f.mode;
-                e.attr_timeout = 1.0;
-                e.entry_timeout = 1.0;
                 e.attr.st_nlink = f.nlink;
+                e.attr.st_size = f.size;
+                e.attr_timeout = 1.0;
+                e.entry_timeout = 10.0;
 
                 if ((f.mode & S_IFMT) == S_IFDIR) {
                     refreshdir(NULL, NULL, f.ino, 0);
@@ -722,7 +722,7 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
         stbuf.st_ino = ino;
         stbuf.st_mode = f.mode;
         stbuf.st_nlink = f.nlink;
-        stbuf.st_size = (filemap[ino].mode & S_IFMT) == S_IFDIR ? f.size : strlen(f.data);
+        stbuf.st_size = f.size;
         fuse_reply_attr(req, &stbuf, 1.0);
     } else {
         fuse_reply_err(req, ENOENT);
@@ -913,7 +913,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     }
 
     if (frmp.currfree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
-        ino_t ino = add_file(strlen("dummy data")+1, strdup("dummy data"), name, S_IFREG | 0777);
+        ino_t ino = add_file(strlen("dummy data\n")+1, strdup("dummy data\n"), name, S_IFREG | 0777);
 
         if (parent != 2) {
             add_filetodir(filemap[parent].name, ino);
