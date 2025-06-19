@@ -914,7 +914,6 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     }
 
     if (frmp.currfree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
-        //char *data = strdup("dummy data\n");
         ino_t ino = add_file(strlen("dummy data\n")+1, strdup("dummy data\n"), name, S_IFREG | 0777);
 
         if (parent != 2) {
@@ -1087,14 +1086,19 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 
 static void smt_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name, size_t size)
 {
-    khint_t k;
-    k = kh_get(dirhash, dirh, name);
+
+    if (!strncmp(name, "security.capability", strlen(name))) {
+        fuse_reply_err(req, EOPNOTSUPP);
+        return;
+    }
 
     if (size) {
+        khint_t k;
+        k = kh_get(dirhash, dirh, name);
         if (k != kh_end(dirh)) {
             fuse_reply_buf(req, name, size);
         } else {
-            fuse_reply_err(req, ENOTSUP);
+            fuse_reply_err(req, ENOENT);
         }
     } else {
         fuse_reply_xattr(req, strlen(name)+1);
@@ -1187,8 +1191,6 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
             }
         }
     }
-
-	fuse_reply_err(req, saverr);
 }
 
 static struct fuse_lowlevel_ops operations = {
