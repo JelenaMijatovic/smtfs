@@ -21,7 +21,7 @@
 #include <sys/stat.h>
 #include <sys/xattr.h>
 
-const char *devfile = NULL;
+char *devfile = NULL;
 
 struct fileino {
     ino_t ino;
@@ -420,9 +420,9 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     if (!lvisit.visits) {
         fatal_error("Couldn't allocate last_visited!");
     }
-
-    add_file(0x0, 0x0, strdup("/"), S_IFDIR);
-
+    char *root = strdup("/");
+    add_file(0x0, 0x0, root, S_IFDIR);
+    free(root);
     //root directory shouldn't contain itself
     filemap[1].dir[0].ino = 0;
     filemap[1].ffree = 0;
@@ -434,8 +434,9 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     } else {
         fatal_error("Couldn't find root directory in hash");
     }
-
-    add_file(0, 0x0, strdup("*"), S_IFDIR | 0777);
+    char *uni = strdup("*");
+    add_file(0, 0x0, uni, S_IFDIR | 0777);
+    free(uni);
 }
 
 static void smt_destroy(void *userdata) {
@@ -913,6 +914,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     }
 
     if (frmp.currfree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
+        //char *data = strdup("dummy data\n");
         ino_t ino = add_file(strlen("dummy data\n")+1, strdup("dummy data\n"), name, S_IFREG | 0777);
 
         if (parent != 2) {
@@ -1052,26 +1054,22 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
     struct file_info f = filemap[ino];
 
     if (size) {
-        value = malloc(size);
+        value = (char *)malloc(size);
         if (!value) {
             fuse_reply_err(req, ENOMEM);
             return;
         }
-        ret = sizeof(value);
-        printf("value %ld %ld\n", sizeof(value), ret);
         char *p = value;
         for (int i = 0; i < MAX_DIR; i++) {
             if (f.dir[i].ino) {
                 struct fileino *node = &f.dir[i];
                 while (node) {
-                    printf("%ld\n", node->ino);
-                    printf("%s\n", filemap[node->ino].name);
                     p = memccpy(p, filemap[node->ino].name, '\0', strlen(filemap[node->ino].name)+1);
                     node = node->next;
                 }
             }
         }
-		fuse_reply_buf(req, value, ret);
+		fuse_reply_buf(req, value, size);
     } else {
         for (int i = 0; i < MAX_DIR; i++) {
             if (f.dir[i].ino) {
@@ -1082,11 +1080,25 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
                 }
             }
         }
-        ret += 8 - (ret%8);
-        printf("ret %ld\n", ret);
 		fuse_reply_xattr(req, ret);
     }
     free(value);
+}
+
+static void smt_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name, size_t size)
+{
+    khint_t k;
+    k = kh_get(dirhash, dirh, name);
+
+    if (size) {
+        if (k != kh_end(dirh)) {
+            fuse_reply_buf(req, name, size);
+        } else {
+            fuse_reply_err(req, ENOTSUP);
+        }
+    } else {
+        fuse_reply_xattr(req, strlen(name)+1);
+    }
 }
 
 int recursive_dir(ino_t dirino, ino_t ino) {
@@ -1199,6 +1211,7 @@ static struct fuse_lowlevel_ops operations = {
     //.flush = smt_flush,
     .release = smt_release,
     .listxattr = smt_listxattr,
+    .getxattr = smt_getxattr,
     .setxattr = smt_setxattr,
     .removexattr = smt_removexattr,
 };
@@ -1257,6 +1270,7 @@ errlabel_one:
 errlabel_two:
     fuse_session_destroy(se);
     free(opts.mountpoint);
+    free(devfile);
     fuse_opt_free_args(&args);
     return retval;
 }
