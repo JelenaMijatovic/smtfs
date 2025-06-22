@@ -20,6 +20,13 @@
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
+#include <limits.h>
+
+#define BITMASK(b) (1 << ((b) % CHAR_BIT))
+#define BITSLOT(b) ((b) / CHAR_BIT)
+#define BITSET(a, b) ((a)[BITSLOT(b)] |= BITMASK(b))
+#define BITTEST(a, b) ((a)[BITSLOT(b)] & BITMASK(b))
+#define BITNSLOTS(nb) ((nb + CHAR_BIT - 1) / CHAR_BIT)
 
 char *devfile = NULL;
 
@@ -52,7 +59,6 @@ struct freemap frmp;
 
 struct dirinfo {
     ino_t ino;
-    bool dironly;
     struct fileino *files; //MAX_CSIZE cut of files
 };
 
@@ -90,7 +96,7 @@ struct dirbuf {
 
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 
-struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
+struct dirinfo* add_directory(ino_t ino, const char* name) {
 
     struct dirinfo *dir = NULL;
     khint_t k;
@@ -101,7 +107,6 @@ struct dirinfo* add_directory(ino_t ino, const char* name, bool dironly) {
         dir = malloc(sizeof(struct dirinfo*));
         if (dir) {
             dir->ino = ino;
-            dir->dironly = dironly;
             dir->files = calloc(MAX_CSIZE, sizeof(struct fileino));
             if (!dir->files) {
                 free(dir);
@@ -257,12 +262,12 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
                 free(filemap[frmp.currfree].name);
                 free(filemap[frmp.currfree].data);
                 free(filemap[frmp.currfree].dir);
-                return -1;
+                return 0;
         }
 
         if ((mode & S_IFMT) == S_IFDIR) {
             filemap[frmp.currfree].nlink = 1;
-            struct dirinfo *ret = add_directory(frmp.currfree, name, 0);
+            struct dirinfo *ret = add_directory(frmp.currfree, name);
             if (!ret || add_filetodir(filemap[1].name, frmp.currfree)) { //root directory contains all directories bar itself
                 if (ret) {
                     remove_directory(name);
@@ -271,7 +276,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
                 free(filemap[frmp.currfree].name);
                 free(filemap[frmp.currfree].data);
                 free(filemap[frmp.currfree].dir);
-                return -1;
+                return 0;
             }
         } else {
             filemap[frmp.currfree].nlink = 0;
@@ -280,7 +285,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
                 free(filemap[frmp.currfree].name);
                 free(filemap[frmp.currfree].data);
                 free(filemap[frmp.currfree].dir);
-                return -1;
+                return 0;
             }
         }
 
@@ -288,7 +293,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
         frmp.currfree = frmp.nextfr[frmp.currfree];
         return ino;
     }
-    return -1;
+    return 0;
 }
 
 int remove_file(ino_t ino) {
@@ -429,7 +434,6 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     khint_t k = kh_get(dirhash, dirh, filemap[1].name);
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_val(dirh, k);
-        dir->dironly = 1;
         dir->files[0].ino = 0;
     } else {
         fatal_error("Couldn't find root directory in hash");
@@ -509,7 +513,7 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
     printf("refreshdir in directory -> %ld\n", ino);
-    // if ino > max_file * 10 its a set op
+
     struct dirinfo *dir = NULL;
     khint_t k;
     k = kh_get(dirhash, dirh, filemap[ino].name);
@@ -597,7 +601,7 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
     }
 }
 
-void dirset(const char* name, const char *pos) {
+int dirset(const char* name, const char *pos) {
 
     char *dir1 = (char *)malloc((pos-name)+1);
     strncpy(dir1, name, pos-name);
@@ -606,57 +610,77 @@ void dirset(const char* name, const char *pos) {
     strncpy(dir2, name+(pos-name)+2, strlen(name)-(pos-name)-1);
     dir2[strlen(name)-(pos-name)-1] = '\0';
 
-    struct dirinfo *d1;
+    struct dirinfo *d1 = NULL;
     khint_t k = kh_get(dirhash, dirh, dir1);
     if (k != kh_end(dirh)) {
         d1 = kh_val(dirh, k);
-        printf("%s\n", filemap[d1->ino].name);
     }
-    struct dirinfo *d2;
+    struct dirinfo *d2 = NULL;
     k = kh_get(dirhash, dirh, dir2);
     if (k != kh_end(dirh)) {
         d2 = kh_val(dirh, k);
-        printf("%s\n", filemap[d2->ino].name);
     }
 
-    char map[MAX_FILES] = {0};
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (!d1->files[i].ino) //and nodes
-            map[d1->files[i].ino]++;
-    }
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (!d2->files[i].ino)
-            map[d2->files[i].ino]++;
-    }
-
-    if (name[(pos-name)+1] == '&') {
-        for (int i = 1; i < MAX_FILES; i++) {
-            if (map[i] != 2) {
-                map[i] = 0;
-            } else {
-                printf("%s\n", filemap[i].name);
-            }
-        }
-    } else if (name[(pos-name)+1] == '|') {
-        for (int i = 1; i < MAX_FILES; i++) {
-            if (map[i] > 0) {
-                printf("%s\n", filemap[i].name);
-            }
-        }
-    } else if (name[(pos-name)+1] == '^') {
-        for (int i = 1; i < MAX_FILES; i++) {
-            if (map[i] != 1) {
-                map[i] = 0;
-            } else {
-                printf("%s\n", filemap[i].name);
-            }
-        }
-    }
-    //show ones that repeat &, all |, show up once ^, or in the first but not the second ~
-    //use a hash, fill with one dir and compare with the other
-    //do refreshdir
     free(dir1);
     free(dir2);
+    if (d1 && d2) {
+        char bmap1[BITNSLOTS(MAX_FILES)];
+        memset(bmap1, 0, BITNSLOTS(MAX_FILES));
+        for (int i = 0; i < MAX_CSIZE; i++) {
+            if (d1->files[i].ino) {
+                struct fileino *node = &d1->files[i];
+                while (node) {
+                    BITSET(bmap1, (int)node->ino);
+                    node = node->next;
+                }
+            }
+        }
+        char bmap2[BITNSLOTS(MAX_FILES)];
+        memset(bmap2, 0, BITNSLOTS(MAX_FILES));
+        for (int i = 0; i < MAX_CSIZE; i++) {
+            if (d2->files[i].ino) {
+                struct fileino *node = &d2->files[i];
+                while (node) {
+                    BITSET(bmap2, (int)node->ino);
+                    node = node->next;
+                }
+            }
+        }
+
+        char bresmap[BITNSLOTS(MAX_FILES)];
+        memset(bresmap, 0, BITNSLOTS(MAX_FILES));
+        if (name[(pos-name)+1] == '&') {
+            for (int i = 1; i < BITNSLOTS(MAX_FILES); i++) {
+                bresmap[i] = BITTEST(bmap1, i) && BITTEST(bmap2, i);
+            }
+        } else if (name[(pos-name)+1] == '|') {
+            for (int i = 1; i < BITNSLOTS(MAX_FILES); i++) {
+                bresmap[i] = BITTEST(bmap1, i) || BITTEST(bmap2, i);
+            }
+        } else if (name[(pos-name)+1] == '^') {
+            for (int i = 1; i < BITNSLOTS(MAX_FILES); i++) {
+                bresmap[i] = !BITTEST(bmap1, i) != !BITTEST(bmap2, i);
+            }
+        } else if (name[(pos-name)+1] == '~') {
+            for (int i = 1; i < BITNSLOTS(MAX_FILES); i++) {
+                bresmap[i] = BITTEST(bmap1, i) && !BITTEST(bmap2, i);
+            }
+        }
+
+        ino_t ino = add_file(0x0, 0x0, name, S_IFDIR | 0777);
+
+        if (ino) {
+            for (int i = 1; i < BITNSLOTS(MAX_FILES); i++) {
+                if (bresmap[i]) {
+                    printf("%d\n", i);
+                    add_filetodir(name, i);
+                }
+            }
+        }
+
+        return ino;
+    }
+    return 0;
 }
 
 static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
@@ -665,10 +689,6 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     khint_t k;
 
     memset(&e, 0, sizeof(e));
-    char const *pos = strchr(name, '\\');
-    if (pos != NULL && (pos-name)+1 != strlen(name)) {
-        dirset(name, pos);
-    }
 
     k = add_opendir(parent);
 
@@ -808,20 +828,29 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
     khint_t k = kh_get(dirhash, dirh, name); //make sure the name isn't already present
 
     if (frmp.currfree < MAX_FILES && k == kh_end(dirh)) {
-        ino_t ino = add_file(0x0, 0x0, name, S_IFDIR | 0777);
+        ino_t ino;
 
-        if (parent != 1) {
-            add_filetodir(filemap[parent].name, ino);
+        char const *pos = strchr(name, '\\');
+        if (pos != NULL && (pos-name)+1 != strlen(name)) {
+            ino = dirset(name, pos);
+        } else {
+            ino = add_file(0x0, 0x0, name, S_IFDIR | 0777);
         }
 
-        e.ino = ino;
-        e.attr.st_ino = ino;
-        e.attr.st_mode = filemap[ino].mode;
-        e.attr.st_nlink = filemap[ino].nlink;
-        e.attr.st_size = filemap[ino].size;
+        if (ino) {
+            if (parent != 1) {
+                add_filetodir(filemap[parent].name, ino);
+            }
 
-        fuse_reply_entry(req, &e);
-        return;
+            e.ino = ino;
+            e.attr.st_ino = ino;
+            e.attr.st_mode = filemap[ino].mode;
+            e.attr.st_nlink = filemap[ino].nlink;
+            e.attr.st_size = filemap[ino].size;
+
+            fuse_reply_entry(req, &e);
+            return;
+        }
     }
 
     fuse_reply_err(req, ENOSPC);
@@ -864,7 +893,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                 f->name[strlen(newname)] = 0x0;
 
                 if ((f->mode & S_IFMT) == S_IFDIR) {
-                    struct dirinfo *newdir = add_directory(olddir->ino, f->name, olddir->dironly);
+                    struct dirinfo *newdir = add_directory(olddir->ino, f->name);
                     newdir->files = olddir->files;
                     remove_directory(name);
                 }
@@ -906,14 +935,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
 
     printf("create called with filename %s and mode %d\n", name, mode);
 
-    struct dirinfo *dir;
-    khint_t k;
-    k = kh_get(dirhash, dirh, filemap[parent].name);
-    if (k != kh_end(dirh)) {
-        dir = kh_val(dirh, k);
-    }
-
-    if (frmp.currfree < MAX_FILES && !(((mode & S_IFMT) != S_IFDIR) && dir->dironly)) {
+    if (frmp.currfree < MAX_FILES && ((mode & S_IFMT) != S_IFDIR) && ((filemap[parent].mode & S_IFMT) == S_IFDIR)) {
         ino_t ino = add_file(strlen("dummy data\n")+1, strdup("dummy data\n"), name, S_IFREG | 0777);
 
         if (parent != 2) {
