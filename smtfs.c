@@ -892,8 +892,10 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
                 if ((f->mode & S_IFMT) == S_IFDIR) {
                     struct dirinfo *newdir = add_directory(olddir->ino, f->name);
+                    free(newdir->files);
                     newdir->files = olddir->files;
-                    remove_directory(name);
+                    free(olddir);
+                    kh_del(dirhash, dirh, k);
                 }
 
                 strncpy(opendir->filenames[i], newname, strlen(newname));
@@ -960,7 +962,7 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
     if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
         fuse_reply_err(req, EISDIR);
     } else if (filemap[ino].ino) {
-        reply_buf_limited(req, filemap[ino].data, strlen(filemap[ino].data), off, size);
+        reply_buf_limited(req, filemap[ino].data, filemap[ino].size, off, size);
         return;
     }
     fuse_reply_err(req, ENOENT);
