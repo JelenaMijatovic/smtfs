@@ -1213,6 +1213,7 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
             }
         }
     }
+    fuse_reply_err(req, saverr);
 }
 
 static struct fuse_lowlevel_ops operations = {
