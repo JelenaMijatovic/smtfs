@@ -936,7 +936,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     printf("create called with filename %s and mode %d\n", name, mode);
 
     if (frmp.currfree < MAX_FILES && ((mode & S_IFMT) != S_IFDIR) && ((filemap[parent].mode & S_IFMT) == S_IFDIR)) {
-        ino_t ino = add_file(strlen("dummy data\n")+1, strdup("dummy data\n"), name, S_IFREG | 0777);
+        ino_t ino = add_file(strlen("dummy data\n"), strdup("dummy data\n"), name, S_IFREG | 0777);
 
         if (parent != 2) {
             add_filetodir(filemap[parent].name, ino);
