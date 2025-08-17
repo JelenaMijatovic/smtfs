@@ -6,6 +6,12 @@
 #define MAX_OPEN 20
 #define MAX_FILENAME_LEN 256
 
+#define ROOT 1
+#define TAGS 2
+#define FILES 3
+#define HOME 4
+#define SYSDIR 4
+
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
 #include <fuse3/fuse_lowlevel.h>
@@ -38,11 +44,15 @@ struct fileino {
 struct file_info
 {
     ino_t ino;
+    int fd;
     char *name;
     size_t size;
     char *data;
     mode_t mode;
     nlink_t nlink;
+    //struct timespec atime;
+    //struct timespec mtime;
+    //struct timespec ctime;
     struct fileino *dir; //MAX_DCSIZE cut of directories
 };
 
@@ -240,6 +250,45 @@ void remove_directory(const char *name) {
     }
 }
 
+static int add_sysdirs(const char *name, mode_t mode) {
+    if (frmp.currfree < MAX_FILES) {
+        filemap[frmp.currfree].ino = frmp.currfree;
+        filemap[frmp.currfree].name = (char *)malloc(MAX_FILENAME_LEN);
+        if (filemap[frmp.currfree].name) {
+            strncpy(filemap[frmp.currfree].name, name, strlen(name)+1);
+            filemap[frmp.currfree].name[strlen(name)] = 0x0;
+        }
+        filemap[frmp.currfree].size = 0x0;
+        filemap[frmp.currfree].data = 0x0;
+        filemap[frmp.currfree].mode = mode;
+        filemap[frmp.currfree].dir = calloc(MAX_DCSIZE, sizeof(struct fileino));
+
+        if (!(filemap[frmp.currfree].name && filemap[frmp.currfree].dir)) {
+            filemap[frmp.currfree].ino = 0;
+            free(filemap[frmp.currfree].name);
+            free(filemap[frmp.currfree].data);
+            free(filemap[frmp.currfree].dir);
+            return 0;
+        }
+        filemap[frmp.currfree].nlink = 1;
+        struct dirinfo *ret = add_directory(frmp.currfree, name);
+        if (!ret) {
+            if (ret) {
+                remove_directory(name);
+            }
+            filemap[frmp.currfree].ino = 0;
+            free(filemap[frmp.currfree].name);
+            free(filemap[frmp.currfree].data);
+            free(filemap[frmp.currfree].dir);
+            return 0;
+        }
+        ino_t ino = frmp.currfree;
+        frmp.currfree = frmp.nextfr[frmp.currfree];
+        return ino;
+    }
+    return 0;
+}
+
 int add_file(size_t size, char *data, const char *name, mode_t mode) {
 
     if (frmp.currfree < MAX_FILES) {
@@ -255,17 +304,17 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
         filemap[frmp.currfree].dir = calloc(MAX_DCSIZE, sizeof(struct fileino));
 
         if (!(filemap[frmp.currfree].name && filemap[frmp.currfree].dir)) {
-                filemap[frmp.currfree].ino = 0;
-                free(filemap[frmp.currfree].name);
-                free(filemap[frmp.currfree].data);
-                free(filemap[frmp.currfree].dir);
-                return 0;
+            filemap[frmp.currfree].ino = 0;
+            free(filemap[frmp.currfree].name);
+            free(filemap[frmp.currfree].data);
+            free(filemap[frmp.currfree].dir);
+            return 0;
         }
 
         if ((mode & S_IFMT) == S_IFDIR) {
             filemap[frmp.currfree].nlink = 1;
             struct dirinfo *ret = add_directory(frmp.currfree, name);
-            if (!ret || add_filetodir(filemap[1].name, frmp.currfree)) { //root directory contains all directories bar itself
+            if (!ret || add_filetodir(filemap[TAGS].name, frmp.currfree)) { //_TAGS contains all directories except those in root
                 if (ret) {
                     remove_directory(name);
                 }
@@ -277,7 +326,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
             }
         } else {
             filemap[frmp.currfree].nlink = 0;
-            if (add_filetodir(filemap[2].name, frmp.currfree)) { //* directory contains all regular files
+            if (add_filetodir(filemap[FILES].name, frmp.currfree)) { //_FILES contains all regular files
                 filemap[frmp.currfree].ino = 0;
                 free(filemap[frmp.currfree].name);
                 free(filemap[frmp.currfree].data);
@@ -418,21 +467,25 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     if (!lvisit.visits) {
         fatal_error("Couldn't allocate last_visited!");
     }
+
     char *root = strdup("/");
-    add_file(0x0, 0x0, root, S_IFDIR);
+    add_sysdirs(root, S_IFDIR | 0555);
     free(root);
-    //root directory shouldn't contain itself
-    filemap[1].dir[0].ino = 0;
-    khint_t k = kh_get(dirhash, dirh, filemap[1].name);
-    if (k != kh_end(dirh)) {
-        struct dirinfo *dir = kh_val(dirh, k);
-        dir->files[0].ino = 0;
-    } else {
-        fatal_error("Couldn't find root directory in hash");
-    }
-    char *uni = strdup("*");
-    add_file(0, 0x0, uni, S_IFDIR | 0777);
-    free(uni);
+
+    char *tags = strdup("_TAGS");
+    add_sysdirs(tags, S_IFDIR | 0777);
+    add_filetodir(filemap[ROOT].name, TAGS);
+    free(tags);
+
+    char *files = strdup("_FILES");
+    add_sysdirs(files, S_IFDIR | 0777);
+    add_filetodir(filemap[ROOT].name, FILES);
+    free(files);
+
+    char *home = strdup("_Home");
+    add_sysdirs(home, S_IFDIR | 0777);
+    add_filetodir(filemap[ROOT].name, HOME);
+    free(files);
 }
 
 static void smt_destroy(void *userdata) {
@@ -664,7 +717,6 @@ int dirset(const char* name, const char *pos) {
         if (ino) {
             for (int i = 1; i < BITNSLOTS(MAX_FILES); i++) {
                 if (bresmap[i]) {
-                    printf("%d\n", i);
                     add_filetodir(name, i);
                 }
             }
@@ -707,7 +759,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
             i++;
         }
     } else if (!strncmp("..", name, strlen(".."))) {
-        struct file_info f = filemap[1];
+        struct file_info f = filemap[ROOT];
         e.ino = f.ino;
         e.attr.st_ino = f.ino;
         e.attr.st_mode = f.mode;
@@ -799,25 +851,6 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     free(b.p);
 }
 
-void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
-{
-    puts("opendir called");
-    fi->fh = ino;
-    fi->cache_readdir = 0;
-    fi->keep_cache = 0;
-    //opendirmap and file handler here!!
-    fuse_reply_open(req, fi);
-}
-
-static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
-{
-    if ((filemap[ino].mode & S_IFMT) == S_IFDIR) {
-        fuse_reply_err(req, EISDIR);
-    } else {
-        fuse_reply_open(req, fi);
-    }
-}
-
 static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
 
     struct fuse_entry_param e;
@@ -836,7 +869,7 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
         }
 
         if (ino) {
-            if (parent != 1) {
+            if (parent != TAGS) {
                 add_filetodir(filemap[parent].name, ino);
             }
 
@@ -858,7 +891,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 {
 	int res = ENOENT;
 
-	if (flags || !strncmp(filemap[1].name, name, strlen(filemap[1].name)) || !strncmp(filemap[2].name, name, strlen(filemap[2].name))) {
+	if (flags || parent == ROOT) {
 		fuse_reply_err(req, EINVAL);
 		return;
 	}
@@ -930,6 +963,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
 static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi)
 {
+	//int newfd;
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
 
@@ -938,7 +972,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     if (frmp.currfree < MAX_FILES && ((mode & S_IFMT) != S_IFDIR) && ((filemap[parent].mode & S_IFMT) == S_IFDIR)) {
         ino_t ino = add_file(strlen("dummy data\n"), strdup("dummy data\n"), name, S_IFREG | 0777);
 
-        if (parent != 2) {
+        if (parent != FILES) {
             add_filetodir(filemap[parent].name, ino);
         }
 
@@ -948,6 +982,20 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
         e.attr.st_nlink = filemap[ino].nlink;
         e.attr.st_size = filemap[ino].size;
 
+        /*char *filepath = malloc(PATH_MAX);
+        if (filepath) {
+            strcat(filepath, devfile);
+            strcat(filepath, "/");
+            strcat(filepath, filemap[FILES].name);
+            strcat(filepath, "/");
+            strcat(filepath, name);
+            newfd = open(devfile, O_RDONLY | O_CREAT);
+            if (newfd) {
+                fi->fh = newfd;
+            }
+            printf("%d\n", errno);
+            free(filepath);
+        }*/
         fuse_reply_create(req, &e, fi);
         return;
     }
@@ -983,7 +1031,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
                 struct file_info f = filemap[opendir->fileinos[i]];
                 remove_filefromdir(filemap[parent].name, f.ino);
 
-                if (parent == 2) { //if unlinking from *, unlink from everywhere and free file
+                if (parent == FILES) { //if unlinking from _FILES, unlink from everywhere and free file
                     remove_file(f.ino);
                 }
                 res = 0;
@@ -1005,10 +1053,10 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
         struct dirinfo *dir = kh_value(dirh, k);
 
         printf("nlink: %ld\n", filemap[dir->ino].nlink);
-        if (dir->ino != 1 && dir->ino != 2 && filemap[dir->ino].nlink > 0) {
+        if (dir->ino > SYSDIR && filemap[dir->ino].nlink > 0) {
             remove_filefromdir(filemap[parent].name, dir->ino);
 
-            if (parent == 1) { //if unlinking from /, unlink from everywhere and free file
+            if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
                 remove_file(dir->ino);
             }
             res = 0;
@@ -1153,7 +1201,7 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
 {
     int saverr = EPERM;
 
-    if (ino < 3) { //don't allow tagging the universal directories / and *
+    if (ino < SYSDIR) { //don't allow tagging system directories
         fuse_reply_err(req, saverr);
         return;
     }
@@ -1193,7 +1241,7 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
     int saverr = EPERM;
     khint_t k;
 
-    if (ino < 3) { //don't allow removing the universals tags / and *
+    if (ino < 3) { //don't allow removal from _TAGS or _FILES via xattr
         fuse_reply_err(req, saverr);
         return;
     }
@@ -1224,8 +1272,6 @@ static struct fuse_lowlevel_ops operations = {
     .getattr = smt_getattr,
     .setattr = smt_setattr,
     .readdir = smt_readdir,
-    .opendir = smt_opendir,
-    .open = smt_open,
     .read = smt_read,
     .mkdir = smt_mkdir,
     .rename = smt_rename,
