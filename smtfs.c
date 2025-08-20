@@ -22,6 +22,7 @@
 #include <string.h>
 #include <errno.h>
 #include <dirent.h>
+#include <time.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include <sys/stat.h>
@@ -50,9 +51,9 @@ struct file_info
     char *data;
     mode_t mode;
     nlink_t nlink;
-    //struct timespec atime;
-    //struct timespec mtime;
-    //struct timespec ctime;
+    struct timespec atime;
+    struct timespec mtime;
+    struct timespec ctime;
     struct fileino *dir; //MAX_DCSIZE cut of directories
 };
 
@@ -193,6 +194,9 @@ int add_filetodir(const char *name, ino_t ino) {
         }
 
         filemap[ino].nlink++;
+        clock_gettime(CLOCK_REALTIME, &filemap[ino].ctime);
+        clock_gettime(CLOCK_REALTIME, &filemap[dir->ino].ctime);
+        clock_gettime(CLOCK_REALTIME, &filemap[dir->ino].mtime);
 
         k = kh_get(opendirhash, opendirh, dir->ino);
         if (k != kh_end(opendirh))
@@ -217,6 +221,9 @@ void remove_filefromdir(const char *name, ino_t ino) {
         remove_ino(filemap[ino].dir, dir->ino, MAX_DCSIZE);
 
         filemap[ino].nlink--;
+        clock_gettime(CLOCK_REALTIME, &filemap[ino].ctime);
+        clock_gettime(CLOCK_REALTIME, &filemap[dir->ino].ctime);
+        clock_gettime(CLOCK_REALTIME, &filemap[dir->ino].mtime);
 
         k = kh_get(opendirhash, opendirh, dir->ino);
         if (k != kh_end(opendirh))
@@ -282,6 +289,10 @@ static int add_sysdirs(const char *name, mode_t mode) {
             free(filemap[frmp.currfree].dir);
             return 0;
         }
+        clock_gettime(CLOCK_REALTIME, &filemap[frmp.currfree].atime);
+        clock_gettime(CLOCK_REALTIME, &filemap[frmp.currfree].mtime);
+        clock_gettime(CLOCK_REALTIME, &filemap[frmp.currfree].ctime);
+
         ino_t ino = frmp.currfree;
         frmp.currfree = frmp.nextfr[frmp.currfree];
         return ino;
@@ -334,6 +345,9 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
                 return 0;
             }
         }
+        clock_gettime(CLOCK_REALTIME, &filemap[frmp.currfree].atime);
+        clock_gettime(CLOCK_REALTIME, &filemap[frmp.currfree].mtime);
+        clock_gettime(CLOCK_REALTIME, &filemap[frmp.currfree].ctime);
 
         ino_t ino = frmp.currfree;
         frmp.currfree = frmp.nextfr[frmp.currfree];
@@ -659,6 +673,8 @@ int dirset(const char* name, const char *pos) {
     khint_t k = kh_get(dirhash, dirh, dir1);
     if (k != kh_end(dirh)) {
         d1 = kh_val(dirh, k);
+    } else {
+        return 0;
     }
     struct dirinfo *d2 = NULL;
     k = kh_get(dirhash, dirh, dir2);
@@ -731,6 +747,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
     struct fuse_entry_param e;
     khint_t k;
+    struct file_info *f = NULL;
 
     memset(&e, 0, sizeof(e));
 
@@ -741,30 +758,28 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
         int i = 0;
         while (opendir->fileinos[i]) {
             if (!strncmp(opendir->filenames[i], name, strlen(name))) {
-                struct file_info f = filemap[opendir->fileinos[i]];
-                e.ino = f.ino;
-                e.attr.st_ino = f.ino;
-                e.attr.st_mode = f.mode;
-                e.attr.st_nlink = f.nlink;
-                e.attr.st_size = f.size;
-                e.attr_timeout = 1.0;
-                e.entry_timeout = 10.0;
-
-                if ((f.mode & S_IFMT) == S_IFDIR) {
-                    refreshdir(NULL, NULL, f.ino, 0);
-                }
-                fuse_reply_entry(req, &e);
-                return;
+                f = &filemap[opendir->fileinos[i]];
+                break;
             }
             i++;
         }
     } else if (!strncmp("..", name, strlen(".."))) {
-        struct file_info f = filemap[ROOT];
-        e.ino = f.ino;
-        e.attr.st_ino = f.ino;
-        e.attr.st_mode = f.mode;
-        e.attr.st_nlink = f.nlink;
-        e.attr.st_size = f.size;
+        f = &filemap[ROOT];
+    }
+
+    if (f) {
+        if ((f->mode & S_IFMT) == S_IFDIR) {
+            refreshdir(NULL, NULL, f->ino, 0);
+        }
+
+        e.ino = f->ino;
+        e.attr.st_ino = f->ino;
+        e.attr.st_mode = f->mode;
+        e.attr.st_nlink = f->nlink;
+        e.attr.st_size = f->size;
+        e.attr.st_atim = f->atime;
+        e.attr.st_ctim = f->ctime;
+        e.attr.st_mtim = f->mtime;
         e.attr_timeout = 1.0;
         e.entry_timeout = 10.0;
 
@@ -800,6 +815,9 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
         stbuf.st_mode = f.mode;
         stbuf.st_nlink = f.nlink;
         stbuf.st_size = f.size;
+        stbuf.st_atim = f.atime;
+        stbuf.st_ctim = f.ctime;
+        stbuf.st_mtim = f.mtime;
         fuse_reply_attr(req, &stbuf, 1.0);
     } else {
         fuse_reply_err(req, ENOENT);
@@ -817,10 +835,18 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
 
     memset(&stbuf, 0, sizeof(stbuf));
     stbuf.st_ino = ino;
-    stbuf.st_mode = filemap[ino].mode;
     stbuf.st_nlink = filemap[ino].nlink;
-    stbuf.st_size = filemap[ino].size;
 
+    if (to_set & FUSE_SET_ATTR_MODE) {
+        stbuf.st_mode = attr->st_mode;
+    } else {
+        stbuf.st_mode = filemap[ino].mode;
+    }
+    if (to_set & FUSE_SET_ATTR_SIZE) {
+        stbuf.st_size = attr->st_size;
+    } else {
+        stbuf.st_size = filemap[ino].size;
+    }
     if (to_set & FUSE_SET_ATTR_ATIME) {
         stbuf.st_atime = attr->st_atime;
     }
@@ -950,6 +976,9 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                 if (parent != newparent) {
                     add_filetodir(filemap[newparent].name, f->ino);
                 }
+                clock_gettime(CLOCK_REALTIME, &f->ctime);
+                clock_gettime(CLOCK_REALTIME, &filemap[parent].ctime);
+                clock_gettime(CLOCK_REALTIME, &filemap[parent].mtime);
 
                 res = 0;
                 break;
@@ -1033,6 +1062,8 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 
                 if (parent == FILES) { //if unlinking from _FILES, unlink from everywhere and free file
                     remove_file(f.ino);
+                } else {
+                    clock_gettime(CLOCK_REALTIME, &filemap[f.ino].ctime);
                 }
                 res = 0;
                 break;
@@ -1058,6 +1089,8 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
             if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
                 remove_file(dir->ino);
+            } else {
+                clock_gettime(CLOCK_REALTIME, &filemap[dir->ino].ctime);
             }
             res = 0;
         }
@@ -1081,8 +1114,12 @@ static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t si
             fuse_reply_err(req, ENOMEM);
             return;
         }
+
         filemap[ino].size = off + size;
         memcpy(filemap[ino].data + off, buf, size);
+        clock_gettime(CLOCK_REALTIME, &filemap[ino].ctime);
+        clock_gettime(CLOCK_REALTIME, &filemap[ino].mtime);
+
         fuse_reply_write(req, size);
         return;
     }
