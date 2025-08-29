@@ -83,6 +83,8 @@ struct opendirinfo {
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
 khash_t(opendirhash) *opendirh;
 
+KHASH_MAP_INIT_STR(filenamehash, int)
+
 struct vst {
     int visit;
     int ino;
@@ -583,6 +585,10 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     k = add_opendir(ino);
 
     if (k != kh_end(opendirh) && dir != NULL) {
+        khash_t(filenamehash) *fnh = kh_init(filenamehash);
+        khint_t k1;
+        int absent;
+
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.visits[opendir->index].visit = lvisit.currvisit++;
         memset(opendir->fileinos, 0, MAX_FILES*sizeof(ino_t));
@@ -593,26 +599,24 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                 while (node) {
                     struct file_info f = filemap[node->ino];
                     printf("refreshdir: found file -> %ld at %d\n", node->ino, i);
-                    char *name;
-                    char app[3] = "~0";
-                    if ((name = malloc(MAX_FILENAME_LEN)) != NULL){
-                        int k = 1;
-                        for (int j = 0; j < i; j++) {
-                            if (dir->files[j].ino) {
-                                struct fileino *nodej = &dir->files[j];
-                                while (nodej) {
-                                    if (!strncmp(filemap[nodej->ino].name, f.name, strlen(f.name))) {
-                                        name[0] = '\0';
-                                        app[1] = k + '0';
-                                        strcat(name, f.name);
-                                        strcat(name, app);
-                                        k++;
-                                    }
-                                    nodej = nodej->next;
-                                }
-                            }
-                        }
-                        if (app[1] != '0') {
+
+                    int counter;
+                    k1 = kh_get(filenamehash, fnh, f.name);
+                    if (k1 == kh_end(fnh)) {
+                        k1 = kh_put(filenamehash, fnh, f.name, &absent);
+                        counter = kh_value(fnh, k1) = 0;
+                    } else {
+                        counter = kh_value(fnh, k1) = kh_value(fnh, k1) + 1;
+                    }
+
+                    if (counter) {
+                        char *name;
+                        char app[3] = "~0";
+                        if ((name = malloc(MAX_FILENAME_LEN)) != NULL) {
+                            name[0] = '\0';
+                            app[1] = counter + '0';
+                            strcat(name, f.name);
+                            strcat(name, app);
                             if (!opendir->filenames[p]) {
                                 opendir->filenames[p] = (char *)malloc(MAX_FILENAME_LEN);
                                 if (!opendir->filenames[p]) {
@@ -622,6 +626,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                             }
                             strncpy(opendir->filenames[p], name, strlen(name));
                             opendir->filenames[p][strlen(name)] = '\0';
+                            free(name);
                         } else {
                             if (!opendir->filenames[p]) {
                                 opendir->filenames[p] = (char *)malloc(MAX_FILENAME_LEN);
@@ -633,10 +638,18 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                             strncpy(opendir->filenames[p], f.name, strlen(f.name));
                             opendir->filenames[p][strlen(f.name)] = '\0';
                         }
-                        free(name);
                     } else {
-                        strcpy(opendir->filenames[p], f.name);
+                        if (!opendir->filenames[p]) {
+                            opendir->filenames[p] = (char *)malloc(MAX_FILENAME_LEN);
+                            if (!opendir->filenames[p]) {
+                                printf("refreshdir: filename malloc fail -> %ld at %d\n", node->ino, i);
+                                continue;
+                            }
+                        }
+                        strncpy(opendir->filenames[p], f.name, strlen(f.name));
+                        opendir->filenames[p][strlen(f.name)] = '\0';
                     }
+
                     opendir->fileinos[p] = f.ino;
                     if (addbuff) {
                         printf("Adding entry for filename -> %s | inode -> %ld\n", opendir->filenames[p], opendir->fileinos[p]);
@@ -648,6 +661,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                 }
             }
         }
+        kh_destroy(filenamehash, fnh);
     }
 }
 
@@ -768,10 +782,6 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     }
 
     if (f) {
-        if ((f->mode & S_IFMT) == S_IFDIR) {
-            refreshdir(NULL, NULL, f->ino, 0);
-        }
-
         e.ino = f->ino;
         e.attr.st_ino = f->ino;
         e.attr.st_mode = f->mode;
