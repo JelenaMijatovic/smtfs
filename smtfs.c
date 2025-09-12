@@ -36,6 +36,7 @@
 #define BITNSLOTS(nb) ((nb + CHAR_BIT - 1) / CHAR_BIT)
 
 char *devfile = NULL;
+char *storage = NULL;
 
 struct fileino {
     ino_t ino;
@@ -51,6 +52,7 @@ struct file_info
     char *data;
     mode_t mode;
     nlink_t nlink;
+    short int dirty;
     struct timespec atime;
     struct timespec mtime;
     struct timespec ctime;
@@ -314,6 +316,7 @@ int add_file(size_t size, char *data, const char *name, mode_t mode) {
         filemap[frmp.currfree].size = size;
         filemap[frmp.currfree].data = data;
         filemap[frmp.currfree].mode = mode;
+        filemap[frmp.currfree].dirty = 0;
         filemap[frmp.currfree].dir = calloc(MAX_DCSIZE, sizeof(struct fileino));
 
         if (!(filemap[frmp.currfree].name && filemap[frmp.currfree].dir)) {
@@ -592,6 +595,26 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.visits[opendir->index].visit = lvisit.currvisit++;
         memset(opendir->fileinos, 0, MAX_FILES*sizeof(ino_t));
+
+        for (int i = 0; i < MAX_FCSIZE; i++) {
+            if (dir->files[i].ino) {
+                struct fileino *node = &dir->files[i];
+                while (node) {
+                    struct file_info f = filemap[node->ino];
+
+                    k1 = kh_get(filenamehash, fnh, f.name);
+                    if (k1 != kh_end(fnh)) {
+                        kh_value(fnh, k1) = 1;
+                    } else {
+                        k1 = kh_put(filenamehash, fnh, f.name, &absent);
+                        kh_value(fnh, k1) = 0;
+                    }
+
+                    node = node->next;
+                }
+            }
+        }
+
         int p = 0;
         for (int i = 0; i < MAX_FCSIZE; i++) {
             if (dir->files[i].ino) {
@@ -600,23 +623,18 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                     struct file_info f = filemap[node->ino];
                     printf("refreshdir: found file -> %ld at %d\n", node->ino, i);
 
-                    int counter;
                     k1 = kh_get(filenamehash, fnh, f.name);
-                    if (k1 == kh_end(fnh)) {
-                        k1 = kh_put(filenamehash, fnh, f.name, &absent);
-                        counter = kh_value(fnh, k1) = 0;
-                    } else {
-                        counter = kh_value(fnh, k1) = kh_value(fnh, k1) + 1;
-                    }
-
-                    if (counter) {
+                    if (kh_value(fnh, k1) == 1) {
                         char *name;
-                        char app[3] = "~0";
-                        if ((name = malloc(MAX_FILENAME_LEN)) != NULL) {
+                        int length = snprintf(NULL, 0, "%ld", f.ino);
+                        char app[length+1];
+                        if ((name = malloc(strlen(f.name) + length + 2)) != NULL) {
                             name[0] = '\0';
-                            app[1] = counter + '0';
+                            sprintf(app, "%ld", f.ino);
                             strcat(name, f.name);
+                            strcat(name, ":");
                             strcat(name, app);
+
                             if (!opendir->filenames[p]) {
                                 opendir->filenames[p] = (char *)malloc(MAX_FILENAME_LEN);
                                 if (!opendir->filenames[p]) {
@@ -1002,7 +1020,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
 static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi)
 {
-	//int newfd;
+	int newfd;
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
 
@@ -1021,21 +1039,25 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
         e.attr.st_nlink = filemap[ino].nlink;
         e.attr.st_size = filemap[ino].size;
 
-        /*char *filepath = malloc(PATH_MAX);
+        char *filepath = malloc(PATH_MAX);
         if (filepath) {
-            strcat(filepath, devfile);
+            strcat(filepath, storage);
             strcat(filepath, "/");
-            strcat(filepath, filemap[FILES].name);
-            strcat(filepath, "/");
-            strcat(filepath, name);
-            newfd = open(devfile, O_RDONLY | O_CREAT);
+            int length = snprintf(NULL, 0, "%ld", ino);
+            char *strino = malloc(length+1);
+            sprintf(strino, "%ld", ino);
+            strcat(filepath, strino);
+
+            newfd = open(filepath, O_WRONLY | O_CREAT | S_IFREG, 0777);
             if (newfd) {
                 fi->fh = newfd;
+                filemap[ino].dirty = 1;
+                fuse_reply_create(req, &e, fi);
+            } else {
+                fuse_reply_err(req, errno);
             }
-            printf("%d\n", errno);
             free(filepath);
-        }*/
-        fuse_reply_create(req, &e, fi);
+        }
         return;
     }
 
@@ -1127,6 +1149,7 @@ static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t si
 
         filemap[ino].size = off + size;
         memcpy(filemap[ino].data + off, buf, size);
+        filemap[ino].dirty = 1;
         clock_gettime(CLOCK_REALTIME, &filemap[ino].ctime);
         clock_gettime(CLOCK_REALTIME, &filemap[ino].mtime);
 
@@ -1135,13 +1158,16 @@ static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t si
     }
 }
 
-/*static void smt_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+static void smt_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-	//int res;
-	//res = close(dup(fi->fh));
-	//fuse_reply_err(req, res == -1 ? errno : 0);
-	fuse_reply_err(req, 0);
-}*/
+	int res;
+	if (filemap[ino].dirty) {
+        write(fi->fh, filemap[ino].data, filemap[ino].size);
+        filemap[ino].dirty = 0;
+	}
+	res = close(dup(fi->fh));
+	fuse_reply_err(req, res == -1 ? errno : 0);
+}
 
 static void smt_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
@@ -1326,7 +1352,7 @@ static struct fuse_lowlevel_ops operations = {
     .unlink = smt_unlink,
     .rmdir = smt_rmdir,
     .write = smt_write,
-    //.flush = smt_flush,
+    .flush = smt_flush,
     .release = smt_release,
     .listxattr = smt_listxattr,
     .getxattr = smt_getxattr,
@@ -1361,6 +1387,7 @@ int main(int argc, char **argv)
     }
 
     devfile = realpath(opts.mountpoint, NULL);
+    storage = "/home/k/Downloads/fuse-3.17.2/example/storage";
 
     se = fuse_session_new(&args, &operations, sizeof(operations), NULL);
     if (se == NULL) {
