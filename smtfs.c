@@ -1416,6 +1416,7 @@ errlabel_two:
     fuse_session_destroy(se);
     free(opts.mountpoint);
     free(devfile);
+    free(storage);
     fuse_opt_free_args(&args);
     return retval;
 }
