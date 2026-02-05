@@ -1,4 +1,4 @@
-#define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 17)
+#define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 18)
 
 #include <fuse3/fuse_lowlevel.h>
 #include "khash.h"
@@ -1093,7 +1093,7 @@ void smtfs_load() {
             }
             fclose(fptr);
         } else {
-            fatal_error("smtfs_load: Couldn't read free.txt!");
+            fatal_error("smtfs_load: Couldn't read dirs.txt!");
         }
     } else {
         fatal_error("smtfs_load: Couldn't allocate memory");
@@ -1102,6 +1102,7 @@ void smtfs_load() {
     //load existing directories ROOT and HOME into cache
     add_opendir(ROOT);
     add_opendir(HOME);
+    refreshdir(NULL, NULL, ROOT, 0);
 }
 
 void read_importdir(char* path, DIR *imfd, ino_t parent, char* parentname) {
@@ -1354,6 +1355,15 @@ static void smt_destroy(void *userdata) {
     printf("smt_destroy: Finished cleanup\n");
 }
 
+static void smt_access(fuse_req_t req, fuse_ino_t ino, int mask) {
+    //struct stat stbuf;
+
+        //stat(filepath, &stbuf);
+        //stbuf.st_mode
+
+    fuse_reply_err(req, ENOSYS);
+}
+
 static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino)
 {
 	struct stat stbuf;
@@ -1481,9 +1491,12 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize)
 {
-    if (off < bufsize) {
-        return fuse_reply_buf(req, buf + off, min(bufsize - off, maxsize));
+    printf("reply_buf_limited called s %ld maxs %ld, offset %ld\n", bufsize, maxsize, off);
+    if (off < maxsize) {
+        printf("off < s\n");
+        return fuse_reply_buf(req, buf, min(bufsize, maxsize));
     } else {
+        printf("off > s\n");
         return fuse_reply_buf(req, NULL, 0);
     }
 }
@@ -1608,7 +1621,6 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
         fin->name = (char*)malloc(strlen(name)+1);
         strncpy(fin->name, name, strlen(name));
         fin->name[strlen(name)] = '\0';
-
         struct opendirentry *entry = kb_getp(kbt_fnames, opendir->fnames, fin);
         if (entry) {
             k = kh_get(openfilehash, fcache, entry->ino);
@@ -1753,7 +1765,7 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
         }
     }
 
-    reply_buf_limited(req, b.p, b.size, off, size);
+    reply_buf_limited(req, b.p, b.size, off, b.size);
     free(b.p);
 }
 
@@ -1994,7 +2006,7 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
                     memset(&stbuf, 0, sizeof(stbuf));
                     stat(filepath, &stbuf);
                     if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                        fd = open(filepath, O_RDONLY);
+                        fd = open(filepath, fi->flags | O_RDONLY);
                         if (fd) {
                             fi->fh = fd;
                             fuse_reply_open(req, fi);
@@ -2007,11 +2019,11 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
                 }
 
                 if ((fi->flags & O_APPEND) == O_APPEND) {
-                    fd = open(filepath, O_RDWR | O_APPEND);
+                    fd = open(filepath, fi->flags);
                 } else if ((fi->flags & O_TRUNC) == O_TRUNC) {
-                    fd = open(filepath, O_RDWR | O_TRUNC);
+                    fd = open(filepath, fi->flags);
                 } else {
-                    fd = open(filepath, O_RDWR);
+                    fd = open(filepath, fi->flags);
                 }
                 if (fd) {
                     fi->fh = fd;
@@ -2033,6 +2045,7 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
 
 static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     (void) fi;
+    printf("smt_read called s %ld, offset %ld\n", size, off);
 
     khint_t k = kh_get(openfilehash, fcache, ino);
     if (k == kh_end(fcache)) {
@@ -2043,13 +2056,17 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
         if ((f->mode & S_IFMT) == S_IFDIR) {
             fuse_reply_err(req, EISDIR);
         } else {
-            void *buf = malloc(size);
-            if (buf) {
-                read(fi->fh, buf, size);
-                reply_buf_limited(req, buf, size, off, f->size);
-                free(buf);
+            if (off < f->size) {
+                void *buf = malloc(size);
+                if (buf) {
+                    read(fi->fh, buf, size);
+                    reply_buf_limited(req, buf, size, off, f->size);
+                    free(buf);
+                } else {
+                    fuse_reply_err(req, ENOMEM);
+                }
             } else {
-                fuse_reply_err(req, ENOMEM);
+                fuse_reply_buf(req, NULL, 0);
             }
             return;
         }
@@ -2166,6 +2183,7 @@ static void smt_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 	res = close(dup(fi->fh));
 	fuse_reply_err(req, res == -1 ? errno : 0);
 }
+//! custom release?
 
 static void smt_statfs(fuse_req_t req, fuse_ino_t ino)
 {
@@ -2376,6 +2394,7 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
 static struct fuse_lowlevel_ops operations = {
     .init = smt_init,
     .destroy = smt_destroy,
+    .access = smt_access,
     .lookup = smt_lookup,
     .forget = smt_forget,
     .getattr = smt_getattr,
