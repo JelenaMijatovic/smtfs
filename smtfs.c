@@ -1,9 +1,9 @@
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 18)
 
 #include <fuse3/fuse_lowlevel.h>
-#include "khash.h"
-#include "ksort.h"
-#include "kbtree.h"
+#include "external/khash.h"
+#include "external/ksort.h"
+#include "external/kbtree.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -136,6 +136,26 @@ khint_t add_opendir(ino_t ino);
 void remove_opendir(ino_t ino);
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 void* get_xattr_from_file(ino_t ino, char* name);
+void fatal_error(const char *message);
+
+char* get_file_path(ino_t ino) {
+    char *filepath = malloc(PATH_MAX);
+    if (filepath) {
+        filepath[0] = '\0';
+        strcat(filepath, config.storage);
+        int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
+        char *strino = malloc(length+1);
+        sprintf(strino, "/%ld", ino / DIRSPLIT);
+        strcat(filepath, strino);
+        free(strino);
+        length = snprintf(NULL, 0, "/%ld", ino);
+        strino = malloc(length+1);
+        sprintf(strino, "/%ld", ino);
+        strcat(filepath, strino);
+        free(strino);
+    }
+    return filepath;
+}
 
 struct dirinfo* add_directory(ino_t ino, const char* name) {
 
@@ -163,23 +183,9 @@ struct dirinfo* add_directory(ino_t ino, const char* name) {
 
 void set_file_xattr(ino_t ino, const char *tag, int mode) {
 
-    char *filepath = malloc(PATH_MAX);
-    if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
-        char *strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        free(strino);
-        length = snprintf(NULL, 0, "/%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
-    }
-
+    char *filepath = get_file_path(ino);
     char *filename = malloc(PATH_MAX);
+
     if (filepath && filename)
     {
         filename[0] = '\0';
@@ -323,25 +329,9 @@ void remove_directory(const char *name) {
 
 int open_file(ino_t ino, const char* name, mode_t mode) {
     int newfd = 0;
+    char *filepath = get_file_path(ino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        strcat(filepath, "/");
-        int length = snprintf(NULL, 0, "%ld", ino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        strcat(filepath, "/");
-        free(strino);
-        length = snprintf(NULL, 0, "%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
-
         if ((mode & S_IFMT) == S_IFDIR) {
             newfd = mkdir(filepath, mode);
             if (!newfd) {
@@ -364,25 +354,9 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
 }
 
 void create_symlink(ino_t ino, const char* name, char* target) {
+    char *filepath = get_file_path(ino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        strcat(filepath, "/");
-        int length = snprintf(NULL, 0, "%ld", ino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        strcat(filepath, "/");
-        free(strino);
-        length = snprintf(NULL, 0, "%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
-
         symlink(target, filepath);
         setxattr(filepath, "user.smtfs_m.name", name, strlen(name)+1, 0);
         nlink_t link = 1;
@@ -392,25 +366,9 @@ void create_symlink(ino_t ino, const char* name, char* target) {
 }
 
 void rename_symlink(ino_t ino, char* newname) {
+    char *filepath = get_file_path(ino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        strcat(filepath, "/");
-        int length = snprintf(NULL, 0, "%ld", ino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        strcat(filepath, "/");
-        free(strino);
-        length = snprintf(NULL, 0, "%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
-
         struct stat stbuf;
         memset(&stbuf, 0, sizeof(stbuf));
         lstat(filepath, &stbuf);
@@ -551,25 +509,9 @@ ino_t add_file(size_t size, const char *name, mode_t mode) {
 }
 
 void delete_file_on_disk(ino_t ino, mode_t mode) {
+    char *filepath = get_file_path(ino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        strcat(filepath, "/");
-        int length = snprintf(NULL, 0, "%ld", ino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        strcat(filepath, "/");
-        free(strino);
-        length = snprintf(NULL, 0, "%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
-
         if (config.passthrough) {
             struct stat stbuf;
             memset(&stbuf, 0, sizeof(stbuf));
@@ -638,22 +580,9 @@ void remove_file(ino_t ino) {
 
 void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
     kbitr_t itr;
+    char *filepath = get_file_path(ino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        free(strino);
-        length = snprintf(NULL, 0, "/%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
         strcat(filepath, "/contents.txt");
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
@@ -676,22 +605,9 @@ void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
 }
 
 void append_dir_contents(ino_t dirino, ino_t ino) {
+    char *filepath = get_file_path(dirino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        int length = snprintf(NULL, 0, "/%ld", dirino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", dirino / DIRSPLIT);
-        strcat(filepath, strino);
-        free(strino);
-        length = snprintf(NULL, 0, "/%ld", dirino);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", dirino);
-        strcat(filepath, strino);
-        free(strino);
         strcat(filepath, "/contents.txt");
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_CREAT, 0777);
@@ -700,7 +616,6 @@ void append_dir_contents(ino_t dirino, ino_t ino) {
             char *strino = malloc(length+1);
             sprintf(strino, "%ld\n", ino);
             write(newfd, strino, length);
-            printf("append_dir errno %d %ld", errno, dirino);
             free(strino);
             close(newfd);
         } else {
@@ -735,23 +650,9 @@ khint_t add_openfile(ino_t ino) {
     struct stat stbuf;
     memset(&stbuf, 0, sizeof(stbuf));
     int absent;
+    char *filepath = get_file_path(ino);
 
-    char *filepath = malloc(PATH_MAX);
-    char *strino;
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino / DIRSPLIT);
-        strcat(filepath, strino);
-        free(strino);
-        length = snprintf(NULL, 0, "/%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino);
-        strcat(filepath, strino);
-        free(strino);
-
         stat(filepath, &stbuf);
         f->size = stbuf.st_size;
         f->mode = stbuf.st_mode;
@@ -797,28 +698,13 @@ khint_t add_openfile(ino_t ino) {
 
 void remove_openfile(ino_t ino) {
     khint_t k = kh_get(openfilehash, fcache, ino);
+
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
         f->nref--;
         if (!f->nref) {
-            char *filepath = malloc(PATH_MAX);
-            char *strino;
+            char *filepath = get_file_path(ino);
             if (filepath) {
-                filepath[0] = '\0';
-                strcat(filepath, config.storage);
-                strcat(filepath, "/");
-                int length = snprintf(NULL, 0, "%ld", ino / DIRSPLIT);
-                strino = malloc(length+1);
-                sprintf(strino, "%ld", ino / DIRSPLIT);
-                strcat(filepath, strino);
-                strcat(filepath, "/");
-                free(strino);
-                length = snprintf(NULL, 0, "%ld", ino);
-                strino = malloc(length+1);
-                sprintf(strino, "%ld", ino);
-                strcat(filepath, strino);
-                free(strino);
-
                 setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
                 setxattr(filepath, "user.smtfs_m.nlink", &f->nlink, sizeof(f->nlink), 0);
                 struct timespec times[2];
@@ -901,21 +787,9 @@ khint_t add_opendir(ino_t ino) {
                     ++f->nref;
 
                     //load directory contents
-                    char *filepath = malloc(PATH_MAX);
+                    char *filepath = get_file_path(ino);
                     if (filepath) {
-                        filepath[0] = '\0';
-                        strcat(filepath, config.storage);
-                        int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
-                        char *strino = malloc(length+1);
-                        sprintf(strino, "/%ld", ino / DIRSPLIT);
-                        strcat(filepath, strino);
-                        free(strino);
-                        length = snprintf(NULL, 0, "/%ld/", ino);
-                        strino = malloc(length+1);
-                        sprintf(strino, "/%ld/", ino);
-                        strcat(filepath, strino);
-                        free(strino);
-                        strcat(filepath, "contents.txt");
+                        strcat(filepath, "/contents.txt");
 
                         FILE *fptr;
                         fptr = fopen(filepath, "r");
@@ -929,7 +803,9 @@ khint_t add_opendir(ino_t ino) {
                                 }
                             }
                             fclose(fptr);
-                        }
+                        } //! else exit when not a new dir
+                    } else {
+                        fatal_error("add_opendir: Couldn't allocate memory\n");
                     }
                     if (ino != FILES && ino != TAGS) { //loading files for these two would be like loading in the entire FS
                         kbitr_t itr;
@@ -1012,20 +888,9 @@ void smtfs_setup() {
 
 void* get_xattr_from_file(ino_t ino, char* name) {
     char *buf = NULL;
-    char *path = malloc(PATH_MAX);
+    char *path = get_file_path(ino);
+
     if (path) {
-        path[0] = '\0';
-        strcat(path, config.storage);
-        int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
-        char *strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino / DIRSPLIT);
-        strcat(path, strino);
-        free(strino);
-        length = snprintf(NULL, 0, "/%ld", ino);
-        strino = malloc(length+1);
-        sprintf(strino, "/%ld", ino);
-        strcat(path, strino);
-        free(strino);
         int size = getxattr(path, name, 0, 0);
         if (size > 0) {
             buf = malloc(size);
@@ -1089,6 +954,7 @@ void smtfs_load() {
                 dir->ino = ino;
                 dir->name = get_xattr_from_file(ino, "user.smtfs_m.name");
                 k = kh_put(dirhash, dirh, dir->name, &absent);
+                printf("dirh %s\n", dir->name);
                 kh_val(dirh, k) = dir;
             }
             fclose(fptr);
@@ -1183,8 +1049,7 @@ void import_dir(char* importroot) {
 
         stat(importroot, &stbuf);
         if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
-            DIR *imfd = NULL;
-            imfd = opendir(importroot);
+            DIR *imfd = opendir(importroot);
             if (imfd) {
                 ino_t ino;
                 char *importname = strdup(basename(importroot));
@@ -1204,8 +1069,7 @@ void import_dir(char* importroot) {
 
                     append_dir_contents(TAGS, ino);
                     set_file_xattr(ino, TAGS_FN, ADD);
-                }
-                else {
+                } else {
                     struct dirinfo *dir = kh_val(dirh, k);
                     ino = dir->ino;
                 }
@@ -1982,49 +1846,20 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
         if ((f->mode & S_IFMT) != S_IFDIR) {
-            char *filepath = malloc(PATH_MAX);
-            char *strino;
+            char *filepath = get_file_path(ino);
             if (filepath) {
-                filepath[0] = '\0';
-                strcat(filepath, config.storage);
-                strcat(filepath, "/");
-                int length = snprintf(NULL, 0, "%ld", ino / DIRSPLIT);
-                strino = malloc(length+1);
-                sprintf(strino, "%ld", ino / DIRSPLIT);
-                strcat(filepath, strino);
-                strcat(filepath, "/");
-                free(strino);
-                length = snprintf(NULL, 0, "%ld", ino);
-                strino = malloc(length+1);
-                sprintf(strino, "%ld", ino);
-                strcat(filepath, strino);
-                free(strino);
-
                 int fd;
+                int32_t flag = 0;
                 if (!config.passthrough) { //ensure file descriptor to imported file is read-only if passthrough isn't set
                     struct stat stbuf;
                     memset(&stbuf, 0, sizeof(stbuf));
                     stat(filepath, &stbuf);
                     if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                        fd = open(filepath, fi->flags | O_RDONLY);
-                        if (fd) {
-                            fi->fh = fd;
-                            fuse_reply_open(req, fi);
-                        } else {
-                            fuse_reply_err(req, EBADF);
-                        }
-                        free(filepath);
-                        return;
+                        flag |= O_RDONLY;
                     }
                 }
 
-                if ((fi->flags & O_APPEND) == O_APPEND) {
-                    fd = open(filepath, fi->flags);
-                } else if ((fi->flags & O_TRUNC) == O_TRUNC) {
-                    fd = open(filepath, fi->flags);
-                } else {
-                    fd = open(filepath, fi->flags);
-                }
+                fd = open(filepath, fi->flags | flag);
                 if (fd) {
                     fi->fh = fd;
                     fuse_reply_open(req, fi);
@@ -2056,7 +1891,13 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
         if ((f->mode & S_IFMT) == S_IFDIR) {
             fuse_reply_err(req, EISDIR);
         } else {
-            if (off < f->size) {
+            struct fuse_bufvec buf = FUSE_BUFVEC_INIT(size);
+            buf.buf[0].flags = FUSE_BUF_IS_FD | FUSE_BUF_FD_SEEK;
+            buf.buf[0].fd = fi->fh;
+            buf.buf[0].pos = off;
+            fuse_reply_data(req, &buf, FUSE_BUF_SPLICE_MOVE);
+            free(buf.buf->mem);
+            /*if (off < f->size) {
                 void *buf = malloc(size);
                 if (buf) {
                     read(fi->fh, buf, size);
@@ -2067,9 +1908,9 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
                 }
             } else {
                 fuse_reply_buf(req, NULL, 0);
-            }
-            return;
+            }*/
         }
+        return;
     }
     fuse_reply_err(req, ENOENT);
 }
@@ -2308,9 +2149,14 @@ int recursive_dir(ino_t dirino, ino_t ino) {
 static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size, int flags)
 {
     int saverr = EPERM;
+    printf("smt_setxattr: %ld %s %s", ino, name, value);
 
     if (ino <= SYSDIR) { //don't allow tagging system directories
         fuse_reply_err(req, saverr);
+        return;
+    }
+    if (!strncmp(name, "user.smtfs", strlen("user.smtfs"))) {
+        fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
 
@@ -2520,7 +2366,7 @@ errlabel_two:
     fuse_session_destroy(se);
     free(opts.mountpoint);
     free(devfile);
-    free(rootdir);
+    closedir(rootdir);
     free(conf.import);
     free(conf.storage);
     free(dirpath);
