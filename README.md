@@ -16,4 +16,4 @@ Tagging is done through regular xattr operations (only the attribute name is rel
 
 **Notes**
 
-smtfs uses [klib](https://github.com/attractivechaos/klib) libraries under the [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/main/klib/LICENSE.txt) for data structure implementation.
+smtfs uses [klib](https://github.com/attractivechaos/klib) under the [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/eaa99ad6db5ac75314d54dc59e0a37546cb05654/NOTICE.md) for data structure implementation.
