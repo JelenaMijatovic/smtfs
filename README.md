@@ -3,8 +3,6 @@ smtfs is a FUSE semantic file system that allows the user to organise their file
 
 smtfs requires a Linux system that supports extended file attributes and has [FUSE](https://github.com/libfuse/libfuse) installed. Currently developing on Linux Mint.
 
-**Disclaimer:** smtfs is in active development and still has many bugs.
-
 **Mounting**
 ```
  ./smtfs mount_location [-o import=target_directory]
@@ -18,4 +16,4 @@ Tagging is done through regular xattr operations (only the attribute name is rel
 
 **Notes**
 
-smtfs uses [klib](https://github.com/attractivechaos/klib) libraries for data structure implementation.
+smtfs uses [klib](https://github.com/attractivechaos/klib) libraries under the [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/main/klib/LICENSE.txt) for data structure implementation.
