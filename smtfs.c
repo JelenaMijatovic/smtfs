@@ -1,9 +1,9 @@
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 18)
 
 #include <fuse3/fuse_lowlevel.h>
-#include "external/khash.h"
-#include "external/ksort.h"
-#include "external/kbtree.h"
+#include "klib/khash.h"
+#include "klib/ksort.h"
+#include "klib/kbtree.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2155,7 +2155,7 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
         fuse_reply_err(req, saverr);
         return;
     }
-    if (!strncmp(name, "user.smtfs", strlen("user.smtfs"))) {
+    if (!strncmp(name, "user.smtfs", strlen("user.smtfs"))) { //!figure out what causes these calls
         fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
