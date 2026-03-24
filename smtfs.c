@@ -37,6 +37,7 @@
 #define SYSDIR 4
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
+#define max(x, y) ((x) > (y) ? (x) : (y))
 
 char *devfile = NULL;
 
@@ -372,11 +373,29 @@ void rename_symlink(ino_t ino, char* newname) {
         struct stat stbuf;
         memset(&stbuf, 0, sizeof(stbuf));
         lstat(filepath, &stbuf);
-        char *buf = malloc(stbuf.st_size);
-        if (buf) {
-            readlink(filepath, buf, stbuf.st_size);
-            //!rename(buf, );
-            //rename(filepath);
+        if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+            char *buf = malloc(stbuf.st_size);
+            if (buf) {//!
+                /*readlink(filepath, buf, stbuf.st_size);
+                char *dirpath = strdup(buf);
+                char *p = strstr(dirpath, basename(buf));
+                char *pp = p;
+                while (p) {
+                    pp = p;
+                    p = strstr(p, basename(buf));
+                }
+                printf("%s\n", dirpath);
+                *pp = '\0';
+                printf("%s\n", dirpath);
+                char *newpath = malloc(strlen(dirpath) + strlen(newname));
+                strcat(newpath, dirpath);
+                strcat(newpath, newname);
+                rename(buf, newpath);
+                printf("%d\n", errno);
+                free(dirpath);
+                free(newpath);*/
+            }
+            free(buf);
         }
         free(filepath);
     }
@@ -1718,7 +1737,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                 struct openfileinfo *f = kh_value(fcache, k);
                 struct dirinfo *olddir = NULL;
 
-                if (strncmp(name, newname, strlen(name))) {
+                if (strncmp(name, newname, max(strlen(name), strlen(newname)))) {
                     if ((f->mode & S_IFMT) == S_IFDIR) {
                         k = kh_get(dirhash, dirh, newname);
                         if (k != kh_end(dirh)) {
@@ -2337,6 +2356,18 @@ int main(int argc, char **argv)
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
         return 1;
+    }
+
+    if (conf.import) {
+        DIR *imfd = opendir(conf.import);
+        if (imfd) {
+            closedir(imfd);
+        } else {
+            printf("Incorrect import argument\n");
+            free(opts.mountpoint);
+            fuse_opt_free_args(&args);
+            return 1;
+        }
     }
 
     se = fuse_session_new(&args, &operations, sizeof(operations), &conf);
