@@ -375,25 +375,24 @@ void rename_symlink(ino_t ino, char* newname) {
         lstat(filepath, &stbuf);
         if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
             char *buf = malloc(stbuf.st_size);
-            if (buf) {//!
-                /*readlink(filepath, buf, stbuf.st_size);
+            if (buf) {
+                readlink(filepath, buf, stbuf.st_size);
+                buf[stbuf.st_size] = '\0';
                 char *dirpath = strdup(buf);
                 char *p = strstr(dirpath, basename(buf));
                 char *pp = p;
-                while (p) {
+                while (p != NULL) {
                     pp = p;
-                    p = strstr(p, basename(buf));
+                    p = strstr(p+1, basename(buf));
                 }
-                printf("%s\n", dirpath);
                 *pp = '\0';
-                printf("%s\n", dirpath);
                 char *newpath = malloc(strlen(dirpath) + strlen(newname));
+                newpath[0] = '\0';
                 strcat(newpath, dirpath);
                 strcat(newpath, newname);
                 rename(buf, newpath);
-                printf("%d\n", errno);
                 free(dirpath);
-                free(newpath);*/
+                free(newpath);
             }
             free(buf);
         }
