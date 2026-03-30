@@ -374,7 +374,7 @@ void rename_symlink(ino_t ino, char* newname) {
         memset(&stbuf, 0, sizeof(stbuf));
         lstat(filepath, &stbuf);
         if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-            char *buf = malloc(stbuf.st_size);
+            char *buf = malloc(stbuf.st_size+1);
             if (buf) {
                 readlink(filepath, buf, stbuf.st_size);
                 buf[stbuf.st_size] = '\0';
@@ -386,11 +386,15 @@ void rename_symlink(ino_t ino, char* newname) {
                     p = strstr(p+1, basename(buf));
                 }
                 *pp = '\0';
-                char *newpath = malloc(strlen(dirpath) + strlen(newname));
+                char *newpath = malloc(strlen(dirpath) + strlen(newname)+1);
                 newpath[0] = '\0';
                 strcat(newpath, dirpath);
                 strcat(newpath, newname);
+
                 rename(buf, newpath);
+                unlink(filepath);
+                create_symlink(ino, newname, newpath);//!check for cases where file isn't open (save tags)
+
                 free(dirpath);
                 free(newpath);
             }
@@ -684,7 +688,6 @@ khint_t add_openfile(ino_t ino) {
             char* list = malloc(size);
             if (list) {
                 listxattr(filepath, list, size);
-
                 int sum = 0;
                 char *s = list;
                 char *p;
@@ -697,10 +700,10 @@ khint_t add_openfile(ino_t ino) {
                         if (k != kh_end(dirh)) {
                             struct dirinfo *dir = kh_val(dirh, k);
                             ino_t *ino = kb_getp(kbt_dirinos, f->dirinos, &dir->ino);
-                            if (ino) kb_putp(kbt_dirinos, f->dirinos, &dir->ino);
+                            if (!ino) kb_putp(kbt_dirinos, f->dirinos, &dir->ino);
                         }
                     }
-                    s = strchr(list, '\0');
+                    s = strchr(s, '\0');
                     s++;
                 }
             }
@@ -821,7 +824,7 @@ khint_t add_opendir(ino_t ino) {
                                 }
                             }
                             fclose(fptr);
-                        } //! else exit when not a new dir
+                        }
                     } else {
                         fatal_error("add_opendir: Couldn't allocate memory\n");
                     }
@@ -1629,6 +1632,7 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
 {
     (void)fi;
     struct dirbuf b;
+    printf("smt_readdir: %ld\n", ino);
 
     memset(&b, 0, sizeof(b));
 
@@ -1643,6 +1647,7 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
         kb_itr_first(kbt_fnames, opendir->fnames, &itr);
         for (; kb_itr_valid(&itr); kb_itr_next(kbt_fnames, opendir->fnames, &itr)) {
             struct opendirentry *fin = &kb_itr_key(struct opendirentry, &itr);
+            printf("smt_readdir: %s %ld\n", fin->name, fin->ino);
             dirbuf_add(req, &b, fin->name, fin->ino);
         }
     }
@@ -1776,8 +1781,10 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     kb_itr_first(kbt_dirinos, f->dirinos, &itr);
                     for (; kb_itr_valid(&itr); kb_itr_next(kbt_dirinos, f->dirinos, &itr)) {
                         ino_t dirino = kb_itr_key(ino_t, &itr);
+                        printf("%ld\n", dirino);
                         k = kh_get(opendirhash, opendirh, dirino);
                         if (k != kh_end(opendirh)) {
+                            printf("%ld\n", dirino);
                             refreshdir(NULL, NULL, dirino, 0);
                         }
                     }
