@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 18)
 
 #include <fuse3/fuse_lowlevel.h>
@@ -8,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <time.h>
 #include <unistd.h>
@@ -85,6 +87,7 @@ struct openfileinfo {
     struct timespec atime;
     struct timespec mtime;
     struct timespec ctime;
+    struct timespec btime;
     kbtree_t(kbt_dirinos) *dirinos;
     int nref;
 };
@@ -393,7 +396,7 @@ void rename_symlink(ino_t ino, char* newname) {
 
                 rename(buf, newpath);
                 unlink(filepath);
-                create_symlink(ino, newname, newpath);//!check for cases where file isn't open (save tags)
+                create_symlink(ino, newname, newpath);
 
                 free(dirpath);
                 free(newpath);
@@ -430,6 +433,7 @@ static int add_sysdirs(const char *name, mode_t mode) {
             clock_gettime(CLOCK_REALTIME, &f->atime);
             clock_gettime(CLOCK_REALTIME, &f->mtime);
             clock_gettime(CLOCK_REALTIME, &f->ctime);
+            clock_gettime(CLOCK_REALTIME, &f->btime);
             f->nref = 0;
 
             int absent;
@@ -490,6 +494,7 @@ ino_t add_file(size_t size, const char *name, mode_t mode) {
             clock_gettime(CLOCK_REALTIME, &f->atime);
             clock_gettime(CLOCK_REALTIME, &f->mtime);
             clock_gettime(CLOCK_REALTIME, &f->ctime);
+            clock_gettime(CLOCK_REALTIME, &f->btime);
 
             int absent;
             khint_t k = kh_put(openfilehash, fcache, f->ino, &absent);
@@ -670,17 +675,22 @@ khint_t add_openfile(ino_t ino) {
     f->nref = 1;
 
     struct stat stbuf;
+    struct statx stxbuf;
     memset(&stbuf, 0, sizeof(stbuf));
+    memset(&stxbuf, 0, sizeof(stxbuf));
     int absent;
     char *filepath = get_file_path(ino);
 
     if (filepath) {
         stat(filepath, &stbuf);
+        statx(0, filepath, 0, STATX_BTIME, &stxbuf);
         f->size = stbuf.st_size;
         f->mode = stbuf.st_mode;
         f->atime = stbuf.st_atim;
         f->mtime = stbuf.st_mtim;
         f->ctime = stbuf.st_ctim;
+        f->btime.tv_sec = stxbuf.stx_btime.tv_sec;
+        f->btime.tv_nsec = stxbuf.stx_btime.tv_nsec;
 
         f->dirinos = kb_init(kbt_dirinos, KB_DEFAULT_SIZE);
         int size = listxattr(filepath, 0, 0);
@@ -1560,14 +1570,13 @@ static void smt_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     }
 }
 
-static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
+static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) //!fi
 {
     struct stat stbuf;
-	(void) fi;
     memset(&stbuf, 0, sizeof(stbuf));
 
     khint_t k = kh_get(openfilehash, fcache, ino);
-    if (k != kh_end(fcache)) {
+    if (k != kh_end(fcache)) { //!add
         struct openfileinfo *f = kh_value(fcache, k);
         stbuf.st_ino = ino;
         stbuf.st_mode = f->mode;
@@ -1625,7 +1634,32 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
     }
 
     fuse_reply_attr(req, &stbuf, 1.0);
-    return;
+}
+
+void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_file_info *fi) {
+    struct statx stxbuf;
+    memset(&stxbuf, 0, sizeof(stxbuf));
+
+    khint_t k = kh_get(openfilehash, fcache, ino);
+    if (k != kh_end(fcache)) {//!add
+        struct openfileinfo *f = kh_value(fcache, k);
+        stxbuf.stx_ino = f->ino;
+        stxbuf.stx_mode = f->mode;
+        stxbuf.stx_nlink = f->nlink;
+        stxbuf.stx_size = f->size;
+        stxbuf.stx_atime.tv_sec = f->atime.tv_sec;
+        stxbuf.stx_atime.tv_nsec = f->atime.tv_nsec;
+        stxbuf.stx_btime.tv_sec = f->btime.tv_sec;
+        stxbuf.stx_btime.tv_nsec = f->btime.tv_nsec;
+        stxbuf.stx_ctime.tv_sec = f->ctime.tv_sec;
+        stxbuf.stx_ctime.tv_nsec = f->ctime.tv_nsec;
+        stxbuf.stx_mtime.tv_sec = f->mtime.tv_sec;
+        stxbuf.stx_mtime.tv_nsec = f->mtime.tv_nsec;
+        stxbuf.stx_mask = STATX_MODE | STATX_NLINK | STATX_ATIME | STATX_BTIME | STATX_CTIME | STATX_MTIME | STATX_INO | STATX_SIZE;
+        fuse_reply_statx(req, flags, &stxbuf, 1.0);
+    } else {
+        fuse_reply_err(req, ENOENT);
+    }
 }
 
 void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
@@ -2270,6 +2304,7 @@ static struct fuse_lowlevel_ops operations = {
     .forget = smt_forget,
     .getattr = smt_getattr,
     .setattr = smt_setattr,
+    .statx = smt_statx,
     .readdir = smt_readdir,
     .open = smt_open,
     .read = smt_read,
