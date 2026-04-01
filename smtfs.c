@@ -543,10 +543,12 @@ void delete_file_on_disk(ino_t ino, mode_t mode) {
             struct stat stbuf;
             memset(&stbuf, 0, sizeof(stbuf));
             lstat(filepath, &stbuf);
-            char *buf = malloc(stbuf.st_size);
+            char *buf = malloc(stbuf.st_size+1);
             if (buf) {
                 readlink(filepath, buf, stbuf.st_size);
+                buf[stbuf.st_size] = '\0';
                 unlink(buf);
+                free(buf);
             }
         }
         remove(filepath);
