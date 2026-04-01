@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/xattr.h>
 #include <limits.h>
 #include <libgen.h>
@@ -47,6 +48,8 @@ struct fuse_smt_userdata {
     int refresh;
     int passthrough;
     int root_fd;
+    dev_t dev;
+    blksize_t blksize;
     char *import;
     char *storage;
 };
@@ -54,6 +57,8 @@ struct fuse_smt_userdata {
 struct smtfs_config {
     int passthrough;
     int root_fd;
+    dev_t dev;
+    blksize_t blksize;
     char *storage;
 };
 
@@ -81,9 +86,10 @@ struct openfileinfo {
     ino_t ino;
     int fd;
     char *name;
-    size_t size;
+    off_t size;
     mode_t mode;
     nlink_t nlink;
+    blkcnt_t blocks;
     struct timespec atime;
     struct timespec mtime;
     struct timespec ctime;
@@ -133,7 +139,7 @@ struct last_visited lvisit;
 
 struct dirbuf {
 	char *p;
-	size_t size;
+	off_t size;
 };
 
 khint_t add_opendir(ino_t ino);
@@ -422,7 +428,8 @@ static int add_sysdirs(const char *name, mode_t mode) {
                 free(f);
                 return 0;
             }
-            f->size = 0x0;
+            f->size = config.blksize;
+            f->blocks = config.blksize/512;
             f->mode = mode;
             if (freemap->ino == ROOT) {
                 f->nlink = 2;
@@ -463,7 +470,7 @@ static int add_sysdirs(const char *name, mode_t mode) {
     return 0;
 }
 
-ino_t add_file(size_t size, const char *name, mode_t mode) {
+ino_t add_file(off_t size, const char *name, mode_t mode) {
 
     if (freemap->ino < MAX_FILES) {
 
@@ -482,6 +489,7 @@ ino_t add_file(size_t size, const char *name, mode_t mode) {
             }
             f->fd = fd;
             f->size = size;
+            f->blocks = config.blksize/512;
             f->mode = mode;
             if ((mode & S_IFMT) == S_IFDIR) {
                 f->nlink = 1;
@@ -687,6 +695,7 @@ khint_t add_openfile(ino_t ino) {
         stat(filepath, &stbuf);
         statx(0, filepath, 0, STATX_BTIME, &stxbuf);
         f->size = stbuf.st_size;
+        f->blocks = stbuf.st_blocks;
         f->mode = stbuf.st_mode;
         f->atime = stbuf.st_atim;
         f->mtime = stbuf.st_mtim;
@@ -725,6 +734,9 @@ khint_t add_openfile(ino_t ino) {
 
         k = kh_put(openfilehash, fcache, f->ino, &absent);
         kh_val(fcache, k) = f;
+    } else {
+        free(f->name);
+        free(f);
     }
     return k;
 }
@@ -1144,6 +1156,8 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     config.passthrough = fuseconf->passthrough;
     config.root_fd = fuseconf->root_fd;
     config.storage = fuseconf->storage;
+    config.dev = fuseconf->dev;
+    config.blksize = fuseconf->blksize;
 
     //test if storage is set up
     DIR *test_fd = NULL;
@@ -1264,7 +1278,7 @@ static void smt_access(fuse_req_t req, fuse_ino_t ino, int mask) {
 static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino)
 {
 	struct stat stbuf;
-	size_t oldsize = b->size;
+	off_t oldsize = b->size;
 
 	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
 	b->p = (char *) realloc(b->p, b->size);
@@ -1572,18 +1586,21 @@ static void smt_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
     }
 }
 
-static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) //!fi
+static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
     struct stat stbuf;
     memset(&stbuf, 0, sizeof(stbuf));
 
-    khint_t k = kh_get(openfilehash, fcache, ino);
-    if (k != kh_end(fcache)) { //!add
+    khint_t k = add_openfile(ino);
+    if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+        stbuf.st_dev = config.dev;
         stbuf.st_ino = ino;
         stbuf.st_mode = f->mode;
         stbuf.st_nlink = f->nlink;
         stbuf.st_size = f->size;
+        stbuf.st_blksize = config.blksize;
+        stbuf.st_blocks = f->blocks;
         stbuf.st_atim = f->atime;
         stbuf.st_ctim = f->ctime;
         stbuf.st_mtim = f->mtime;
@@ -1642,13 +1659,17 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
     struct statx stxbuf;
     memset(&stxbuf, 0, sizeof(stxbuf));
 
-    khint_t k = kh_get(openfilehash, fcache, ino);
-    if (k != kh_end(fcache)) {//!add
+    khint_t k = add_openfile(ino);
+    if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+        stxbuf.stx_blksize = config.blksize;
         stxbuf.stx_ino = f->ino;
         stxbuf.stx_mode = f->mode;
         stxbuf.stx_nlink = f->nlink;
         stxbuf.stx_size = f->size;
+        stxbuf.stx_blocks = f->blocks;
+        stxbuf.stx_dev_major = major(config.dev);
+        stxbuf.stx_dev_minor = minor(config.dev);
         stxbuf.stx_atime.tv_sec = f->atime.tv_sec;
         stxbuf.stx_atime.tv_nsec = f->atime.tv_nsec;
         stxbuf.stx_btime.tv_sec = f->btime.tv_sec;
@@ -1657,7 +1678,7 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
         stxbuf.stx_ctime.tv_nsec = f->ctime.tv_nsec;
         stxbuf.stx_mtime.tv_sec = f->mtime.tv_sec;
         stxbuf.stx_mtime.tv_nsec = f->mtime.tv_nsec;
-        stxbuf.stx_mask = STATX_MODE | STATX_NLINK | STATX_ATIME | STATX_BTIME | STATX_CTIME | STATX_MTIME | STATX_INO | STATX_SIZE;
+        stxbuf.stx_mask = STATX_MODE | STATX_NLINK | STATX_ATIME | STATX_BTIME | STATX_CTIME | STATX_MTIME | STATX_INO | STATX_SIZE | STATX_BLOCKS;
         fuse_reply_statx(req, flags, &stxbuf, 1.0);
     } else {
         fuse_reply_err(req, ENOENT);
@@ -2065,7 +2086,7 @@ static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t si
                 f->size = size;
             }
 
-            size_t res = write(fi->fh, buf, size);
+            off_t res = write(fi->fh, buf, size);
             clock_gettime(CLOCK_REALTIME, &f->ctime);
             clock_gettime(CLOCK_REALTIME, &f->mtime);
 
@@ -2386,6 +2407,11 @@ int main(int argc, char **argv)
     devfile = realpath(opts.mountpoint, NULL);
     DIR *rootdir = opendir(devfile);
     conf.root_fd = dirfd(rootdir);
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
+    fstat(conf.root_fd, &stbuf);
+    conf.dev = stbuf.st_dev;
+    conf.blksize = stbuf.st_blksize;
 
     char *storage = malloc(PATH_MAX);
     char *dirpath = strdup(dirname(devfile));
