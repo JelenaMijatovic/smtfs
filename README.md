@@ -5,8 +5,10 @@ smtfs requires a Linux system that supports extended file attributes and has [FU
 
 **Mounting**
 ```
- ./smtfs mount_location [-o import=target_directory]
+ ./smtfs mount_location [-p|--passthrough] [-o import=source_directory]
 ```
+The passthrough option enables the user to rename and delete files **in the source directory(!)** through smtfs.
+
 **Unmounting**
 ```
  fusermount3 -u mount_location
