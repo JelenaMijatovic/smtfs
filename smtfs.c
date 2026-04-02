@@ -89,6 +89,8 @@ struct openfileinfo {
     off_t size;
     mode_t mode;
     nlink_t nlink;
+    uid_t uid;
+    gid_t gid;
     blkcnt_t blocks;
     struct timespec atime;
     struct timespec mtime;
@@ -423,11 +425,13 @@ static int add_sysdirs(const char *name, mode_t mode) {
             f->name = (char *)malloc(strlen(name)+1);
             if (f->name) {
                 strncpy(f->name, name, strlen(name));
-                f->name[strlen(name)] = 0x0;
+                f->name[strlen(name)] = '\0';
             } else {
                 free(f);
                 return 0;
             }
+            f->uid = 0;
+            f->gid = 0;
             f->size = config.blksize;
             f->blocks = config.blksize/512;
             f->mode = mode;
@@ -482,12 +486,14 @@ ino_t add_file(off_t size, const char *name, mode_t mode) {
             f->name = (char *)malloc(strlen(name)+1);
             if (f->name) {
                 strncpy(f->name, name, strlen(name));
-                f->name[strlen(name)] = 0x0;
+                f->name[strlen(name)] = '\0';
             } else {
                 free(f);
                 return 0;
             }
             f->fd = fd;
+            f->uid = 0;
+            f->gid = 0;
             f->size = size;
             f->blocks = config.blksize/512;
             f->mode = mode;
@@ -694,6 +700,8 @@ khint_t add_openfile(ino_t ino) {
     if (filepath) {
         stat(filepath, &stbuf);
         statx(0, filepath, 0, STATX_BTIME, &stxbuf);
+        f->uid = stbuf.st_uid;
+        f->gid = stbuf.st_gid;
         f->size = stbuf.st_size;
         f->blocks = stbuf.st_blocks;
         f->mode = stbuf.st_mode;
@@ -1444,7 +1452,7 @@ ino_t dirset(const char* name, const char *pos) {
     if (d1 && d2) {
         switch (name[(pos-name)+1]) {
             case '&':{
-                        ino_t ino = add_file(0x0, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
                         kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
                         for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
@@ -1458,7 +1466,7 @@ ino_t dirset(const char* name, const char *pos) {
                         return ino;
                     }
             case '|':{
-                        ino_t ino = add_file(0x0, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
                         kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
                         for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
@@ -1474,7 +1482,7 @@ ino_t dirset(const char* name, const char *pos) {
                         return ino;
                     }
             case '^':{
-                        ino_t ino = add_file(0x0, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
                         kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
                         for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
@@ -1496,7 +1504,7 @@ ino_t dirset(const char* name, const char *pos) {
                         return ino;
                     }
             case '~':{
-                        ino_t ino = add_file(0x0, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
                         kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
                         for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
@@ -1598,6 +1606,8 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
         stbuf.st_ino = ino;
         stbuf.st_mode = f->mode;
         stbuf.st_nlink = f->nlink;
+        stbuf.st_uid = f->uid;
+        stbuf.st_gid = f->gid;
         stbuf.st_size = f->size;
         stbuf.st_blksize = config.blksize;
         stbuf.st_blocks = f->blocks;
@@ -1666,6 +1676,8 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
         stxbuf.stx_ino = f->ino;
         stxbuf.stx_mode = f->mode;
         stxbuf.stx_nlink = f->nlink;
+        stxbuf.stx_uid = f->uid;
+        stxbuf.stx_gid = f->gid;
         stxbuf.stx_size = f->size;
         stxbuf.stx_blocks = f->blocks;
         stxbuf.stx_dev_major = major(config.dev);
@@ -1678,7 +1690,7 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
         stxbuf.stx_ctime.tv_nsec = f->ctime.tv_nsec;
         stxbuf.stx_mtime.tv_sec = f->mtime.tv_sec;
         stxbuf.stx_mtime.tv_nsec = f->mtime.tv_nsec;
-        stxbuf.stx_mask = STATX_MODE | STATX_NLINK | STATX_ATIME | STATX_BTIME | STATX_CTIME | STATX_MTIME | STATX_INO | STATX_SIZE | STATX_BLOCKS;
+        stxbuf.stx_mask = STATX_BASIC_STATS | STATX_BTIME;
         fuse_reply_statx(req, flags, &stxbuf, 1.0);
     } else {
         fuse_reply_err(req, ENOENT);
@@ -1727,7 +1739,7 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
             if (pos != NULL && (pos-name)+1 != strlen(name)) {
                 ino = dirset(name, pos);
             } else {
-                ino = add_file(0x0, name, S_IFDIR | mode);
+                ino = add_file(config.blksize, name, S_IFDIR | mode);
             }
 
             if (ino) {
@@ -1815,7 +1827,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     free(f->name);
                     f->name = (char*) malloc(strlen(newname)+1);
                     strncpy(f->name, newname, strlen(newname));
-                    f->name[strlen(newname)] = 0x0;
+                    f->name[strlen(newname)] = '\0';
 
                     if ((f->mode & S_IFMT) == S_IFDIR) {
                         add_directory(olddir->ino, f->name);
@@ -2072,25 +2084,22 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
 static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi) {
     printf("smt_write called on file %ld\n", ino);
     printf("offset = %lu and size=%zu\n", off, size);
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
 
-    khint_t k = kh_get(openfilehash, fcache, ino);
+    khint_t k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
         if ((f->mode & S_IFMT) == S_IFDIR) {
             fuse_reply_err(req, EISDIR);
-        } else if (ino < freemap->ino) {
-
-            if ((fi->flags & O_APPEND) == O_APPEND) {
-                f->size += size;
-            } else {
-                f->size = size;
-            }
-
+        } else {
             off_t res = write(fi->fh, buf, size);
-            clock_gettime(CLOCK_REALTIME, &f->ctime);
-            clock_gettime(CLOCK_REALTIME, &f->mtime);
-
             if (res != -1) {
+                fstat(fi->fh, &stbuf);
+                f->size = stbuf.st_size;
+                f->blocks = stbuf.st_blocks;
+                clock_gettime(CLOCK_REALTIME, &f->ctime);
+                clock_gettime(CLOCK_REALTIME, &f->mtime);
                 fuse_reply_write(req, res);
             } else {
                 fuse_reply_err(req, errno);
@@ -2279,7 +2288,7 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
             saverr = add_filetodir(name, ino);
         }
     } else {
-        saverr = add_file(0x0, name, S_IFDIR | 0777);
+        saverr = add_file(config.blksize, name, S_IFDIR | 0777);
         saverr = add_filetodir(name, ino);
     }
 
