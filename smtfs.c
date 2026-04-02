@@ -1622,24 +1622,29 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
 
 static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *fi) {
     struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
 
-    khint_t k = kh_get(openfilehash, fcache, ino);
+    khint_t k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
 
-        if ((f->mode & S_IFMT) == S_IFDIR) {
-            fuse_reply_err(req, EISDIR);
-            return;
-        }
-
-        memset(&stbuf, 0, sizeof(stbuf));
-        stbuf.st_ino = ino;
+        stbuf.st_ino = f->ino;
         stbuf.st_nlink = f->nlink;
 
         if (to_set & FUSE_SET_ATTR_MODE) {
             f->mode = attr->st_mode;
         }
         stbuf.st_mode = f->mode;
+
+        if (to_set & FUSE_SET_ATTR_UID) {
+            f->uid = attr->st_uid;
+        }
+        stbuf.st_uid = f->uid;
+
+        if (to_set & FUSE_SET_ATTR_GID) {
+            f->gid = attr->st_gid;
+        }
+        stbuf.st_gid = f->gid;
 
         if (to_set & FUSE_SET_ATTR_SIZE) {
             f->size = attr->st_size;
@@ -1648,11 +1653,15 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
 
         if (to_set & FUSE_SET_ATTR_ATIME) {
             f->atime = attr->st_atim;
+        } else if (to_set & FUSE_SET_ATTR_ATIME_NOW) {
+            f->atime.tv_nsec = UTIME_NOW;
         }
         stbuf.st_atim = f->atime;
 
         if (to_set & FUSE_SET_ATTR_MTIME) {
             f->mtime = attr->st_mtim;
+        } else if (to_set & FUSE_SET_ATTR_MTIME_NOW) {
+            f->mtime.tv_nsec = UTIME_NOW;
         }
         stbuf.st_mtim = f->mtime;
 
@@ -1660,9 +1669,11 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
             f->ctime = attr->st_ctim;
         }
         stbuf.st_ctim = f->ctime;
-    }
 
-    fuse_reply_attr(req, &stbuf, 1.0);
+        fuse_reply_attr(req, &stbuf, 1.0);
+    } else {
+        fuse_reply_err(req, ENOENT);
+    }
 }
 
 void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_file_info *fi) {
@@ -1672,16 +1683,16 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
     khint_t k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+        stxbuf.stx_mask = STATX_BASIC_STATS | STATX_BTIME;
         stxbuf.stx_blksize = config.blksize;
-        stxbuf.stx_ino = f->ino;
-        stxbuf.stx_mode = f->mode;
         stxbuf.stx_nlink = f->nlink;
         stxbuf.stx_uid = f->uid;
         stxbuf.stx_gid = f->gid;
+        stxbuf.stx_mode = f->mode;
+        stxbuf.stx_ino = f->ino;
         stxbuf.stx_size = f->size;
         stxbuf.stx_blocks = f->blocks;
-        stxbuf.stx_dev_major = major(config.dev);
-        stxbuf.stx_dev_minor = minor(config.dev);
+        stxbuf.stx_attributes_mask = 0x0;
         stxbuf.stx_atime.tv_sec = f->atime.tv_sec;
         stxbuf.stx_atime.tv_nsec = f->atime.tv_nsec;
         stxbuf.stx_btime.tv_sec = f->btime.tv_sec;
@@ -1690,7 +1701,8 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
         stxbuf.stx_ctime.tv_nsec = f->ctime.tv_nsec;
         stxbuf.stx_mtime.tv_sec = f->mtime.tv_sec;
         stxbuf.stx_mtime.tv_nsec = f->mtime.tv_nsec;
-        stxbuf.stx_mask = STATX_BASIC_STATS | STATX_BTIME;
+        stxbuf.stx_dev_major = major(config.dev);
+        stxbuf.stx_dev_minor = minor(config.dev);
         fuse_reply_statx(req, flags, &stxbuf, 1.0);
     } else {
         fuse_reply_err(req, ENOENT);
