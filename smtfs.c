@@ -1024,6 +1024,43 @@ void smtfs_load() {
     refreshdir(NULL, NULL, ROOT, 0);
 }
 
+int is_import_new(char* importroot) {
+    char* path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+    if (path) {
+        path[0] = '\0';
+        strcat(path, config.storage);
+        strcat(path, "/imports.txt");
+        FILE *fptr;
+        fptr = fopen(path, "r");
+        free(path);
+        if (fptr) {
+            char *importdir = malloc(PATH_MAX);
+            if (importdir) {
+                while (fgets(importdir, PATH_MAX, fptr) != NULL) {
+                    char *p = strchr(importdir, '\n');
+                    *p = '\0';
+                    if (!strncmp(importroot, importdir, strlen(importdir))) {
+                        free(importdir);
+                        fclose(fptr);
+                        return 0;
+                    }
+                    memset(importdir, 0, PATH_MAX);
+                }
+                free(importdir);
+            } else {
+                fatal_error("is_import_new: Couldn't allocate memory");
+            }
+            fclose(fptr);
+            return 1;
+        } else { //imports.txt not found, first import
+            return 1;
+        }
+    } else {
+        fatal_error("is_import_new: Couldn't allocate memory");
+    }
+    return 0;
+}
+
 void read_importdir(char* path, DIR *imfd, ino_t parent, char* parentname) {
     struct dirent *entry = NULL;
     struct stat stbuf;
@@ -1169,7 +1206,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     //test if storage is set up
     DIR *test_fd = NULL;
-    char *path = malloc(PATH_MAX);
+    char *path = malloc(strlen(config.storage) + strlen("/0")+1);
     if (path) {
         path[0] = '\0';
         strcat(path, config.storage);
@@ -1186,7 +1223,29 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     closedir(test_fd);
 
     if (fuseconf->import) {
-        import_dir(fuseconf->import);
+        if (is_import_new(fuseconf->import)) {
+            path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+            if (path) {
+                path[0] = '\0';
+                strcat(path, config.storage);
+                strcat(path, "/imports.txt");
+                int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0777);
+                if (fd) {
+                    write(fd, fuseconf->import, strlen(fuseconf->import));
+                    write(fd, "\n", 1);
+                    close(fd);
+
+                    import_dir(fuseconf->import);
+                } else {
+                    printf("smt_init: Couldn't open imports.txt, skipping import\n");
+                }
+                free(path);
+            } else {
+                printf("smt_init: Couldn't allocate memory during import, skipping\n");
+            }
+        } else {
+            printf("smt_init: Import directory %s already included, skipping\n", fuseconf->import);
+        }
     }
 
 }
@@ -1207,7 +1266,7 @@ static void smt_destroy(void *userdata) {
         filepath[0] = '\0';
         strcat(filepath, config.storage);
         strcat(filepath, "/dirs.txt");
-        int newfd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
+        int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
             char *strino;
             for (khint_t k = 0; k < kh_end(dirh); ++k)
@@ -1248,7 +1307,7 @@ static void smt_destroy(void *userdata) {
         filepath[0] = '\0';
         strcat(filepath, config.storage);
         strcat(filepath, "/free.txt");
-        int newfd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
+        int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
             int length;
             char *strino;
