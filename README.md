@@ -9,6 +9,11 @@ smtfs requires a Linux system that supports extended file attributes and has [FU
 ```
 The passthrough option enables the user to rename and delete files **in the source directory(!)** through smtfs.
 
+Multiple source directories can be imported at once by appending them with '&' within single quotes:
+```
+ ./smtfs mount_location -o import='srcdir1&srcdir2'
+```
+
 **Unmounting**
 ```
  fusermount3 -u mount_location
