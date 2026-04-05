@@ -21,7 +21,7 @@ Multiple source directories can be imported at once by appending them with '&' w
 **File operations**
 
 Tagging is done through regular xattr operations (only the attribute name is relevant). It's also possible to tag files by "moving" them to the corresponding directory in a file manager, and undo tagging by deleting the file in the same directory.
-Entirely removing a file or directory from smtfs is done via removing them in the /_FILES and /_TAGS directories respectively. Removing a directory doesn't remove the files contained in it.
+Entirely removing a file or directory from smtfs is done via removing it in the /_FILES and /_TAGS directory respectively. Removing a directory doesn't remove the files contained in it.
 
 **Notes**
 
