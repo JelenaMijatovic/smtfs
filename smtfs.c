@@ -1184,6 +1184,32 @@ void import_dir(char* importroot) {
     }
 }
 
+void add_import(char* importdir) {
+    if (is_import_new(importdir)) {
+        char* path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+        if (path) {
+            path[0] = '\0';
+            strcat(path, config.storage);
+            strcat(path, "/imports.txt");
+            int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0777);
+            if (fd) {
+                write(fd, importdir, strlen(importdir));
+                write(fd, "\n", 1);
+                close(fd);
+
+                import_dir(importdir);
+            } else {
+                printf("smt_init: Couldn't open imports.txt, skipping import\n");
+            }
+            free(path);
+        } else {
+            printf("smt_init: Couldn't allocate memory during import, skipping\n");
+        }
+    } else {
+        printf("smt_init: Import directory %s already included, skipping\n", importdir);
+    }
+}
+
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     dirh = kh_init(dirhash);
@@ -1223,29 +1249,17 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     closedir(test_fd);
 
     if (fuseconf->import) {
-        if (is_import_new(fuseconf->import)) {
-            path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
-            if (path) {
-                path[0] = '\0';
-                strcat(path, config.storage);
-                strcat(path, "/imports.txt");
-                int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0777);
-                if (fd) {
-                    write(fd, fuseconf->import, strlen(fuseconf->import));
-                    write(fd, "\n", 1);
-                    close(fd);
-
-                    import_dir(fuseconf->import);
-                } else {
-                    printf("smt_init: Couldn't open imports.txt, skipping import\n");
-                }
-                free(path);
-            } else {
-                printf("smt_init: Couldn't allocate memory during import, skipping\n");
+        char *importdir = fuseconf->import;
+        if (strchr(fuseconf->import, '&')) {
+            char *q = importdir;
+            while ((q = strchr(q, '&'))) {
+                *q = '\0';
+                add_import(importdir);
+                *q = '&';
+                importdir = ++q;
             }
-        } else {
-            printf("smt_init: Import directory %s already included, skipping\n", fuseconf->import);
         }
+        add_import(importdir);
     }
 
 }
@@ -2399,6 +2413,17 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
     fuse_reply_err(req, saverr);
 }
 
+int is_importdir_invalid(char* importdir) {
+    DIR *imfd = opendir(importdir);
+    if (imfd) {
+        closedir(imfd);
+        return 0;
+    } else {
+        printf("Incorrect import argument\n");
+        return 1;
+    }
+}
+
 static struct fuse_lowlevel_ops operations = {
     .init = smt_init,
     .destroy = smt_destroy,
@@ -2507,12 +2532,22 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (conf.import) {
-        DIR *imfd = opendir(conf.import);
-        if (imfd) {
-            closedir(imfd);
-        } else {
-            printf("Incorrect import argument\n");
+    if (conf.import) { //check all import sources
+        char *importdir = conf.import;
+        if (strchr(conf.import, '&')) {
+            char *q = importdir;
+            while ((q = strchr(q, '&'))) {
+                *q = '\0';
+                if (is_importdir_invalid(importdir)) {
+                    free(opts.mountpoint);
+                    fuse_opt_free_args(&args);
+                    return 1;
+                }
+                *q = '&';
+                importdir = ++q;
+            }
+        }
+        if (is_importdir_invalid(importdir)) {
             free(opts.mountpoint);
             fuse_opt_free_args(&args);
             return 1;
