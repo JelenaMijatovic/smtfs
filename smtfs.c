@@ -354,7 +354,7 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
         } else {
             newfd = open(filepath, O_WRONLY | O_CREAT, mode);
             if (newfd) {
-                fsetxattr(newfd, "user.smtfs_m.name", name, strlen(name)+1, 0);
+                setxattr(filepath, "user.smtfs_m.name", name, strlen(name)+1, 0);
                 nlink_t link = 1;
                 setxattr(filepath, "user.smtfs_m.nlink", &link, sizeof(link), 0);
             }
@@ -370,6 +370,7 @@ void create_symlink(ino_t ino, const char* name, char* target) {
 
     if (filepath) {
         symlink(target, filepath);
+        setxattr(filepath, "user.smtfs_m.ino", &ino, sizeof(ino), 0);
         setxattr(filepath, "user.smtfs_m.name", name, strlen(name)+1, 0);
         nlink_t link = 1;
         setxattr(filepath, "user.smtfs_m.nlink", &link, sizeof(link), 0);
@@ -553,10 +554,10 @@ void delete_file_on_disk(ino_t ino, mode_t mode) {
     char *filepath = get_file_path(ino);
 
     if (filepath) {
-        if (config.passthrough) {
-            struct stat stbuf;
-            memset(&stbuf, 0, sizeof(stbuf));
-            lstat(filepath, &stbuf);
+        struct stat stbuf;
+        memset(&stbuf, 0, sizeof(stbuf));
+        lstat(filepath, &stbuf);
+        if (config.passthrough) { //delete file in source dir
             char *buf = malloc(stbuf.st_size+1);
             if (buf) {
                 readlink(filepath, buf, stbuf.st_size);
@@ -564,8 +565,12 @@ void delete_file_on_disk(ino_t ino, mode_t mode) {
                 unlink(buf);
                 free(buf);
             }
+        } else if ((stbuf.st_mode & S_IFMT) == S_IFLNK) { //mark file in source dir as excluded
+            ino = 0;
+            setxattr(filepath, "user.smtfs_m.ino", &ino, sizeof(ino), 0);
         }
-        remove(filepath);
+
+        remove(filepath); //remove from storage
 
         free(filepath);
     }
@@ -1210,6 +1215,133 @@ void add_import(char* importdir) {
     }
 }
 
+void refresh_importdir(char* path, ino_t parent, char* parentname) {
+    DIR *imfd = opendir(path);
+    if (imfd) {
+        struct dirent *entry = NULL;
+        struct stat stbuf;
+        memset(&stbuf, 0, sizeof(stbuf));
+        while ((entry = readdir(imfd)) != NULL) {
+            char *entrpath = malloc(PATH_MAX);
+            if (entrpath) {
+                entrpath[0] = '\0';
+                strcat(entrpath, path);
+
+                strcat(entrpath, "/");
+                strcat(entrpath, entry->d_name);
+
+                stat(path, &stbuf);
+                if (strncmp(entry->d_name, ".", strlen(entry->d_name)) && strncmp(entry->d_name, "..", strlen(entry->d_name))) {
+                    ino_t ino;
+                    if (entry->d_type == DT_DIR) {
+                        DIR *imfd = NULL;
+                        imfd = opendir(entrpath);
+                        if (imfd) {
+                            khint_t k = kh_get(dirhash, dirh, entry->d_name);
+                            if (k == kh_end(dirh)) { //if new
+                                if (freemap->nextfr) {
+                                    ino = freemap->ino;
+                                    struct freeino *temp = freemap;
+                                    freemap = freemap->nextfr;
+                                    free(temp);
+                                } else {
+                                    ino = freemap->ino++;
+                                }
+                                add_directory(ino, entry->d_name);
+                                open_file(ino, entry->d_name, 0777 | S_IFDIR);
+
+                                append_dir_contents(TAGS, ino);
+                                set_file_xattr(ino, TAGS_FN, ADD);
+                            } else {
+                                struct dirinfo *dir = kh_val(dirh, k);
+                                ino = dir->ino;
+                            }
+
+                            refresh_importdir(entrpath, ino, entry->d_name);
+
+                            append_dir_contents(parent, ino);
+                            set_file_xattr(ino, parentname, ADD);
+
+                            closedir(imfd);
+                        }
+                    } else {
+                        if (getxattr(entrpath, "user.smtfs_m.ino", &ino, sizeof(ino)) == -1) { //if new
+                            if (freemap->nextfr) {
+                                ino = freemap->ino;
+                                struct freeino *temp = freemap;
+                                freemap = freemap->nextfr;
+                                free(temp);
+                            } else {
+                                ino = freemap->ino++;
+                            }
+                            create_symlink(ino, entry->d_name, entrpath);
+
+                            append_dir_contents(FILES, ino);
+                            set_file_xattr(ino, FILES_FN, ADD);
+                            append_dir_contents(parent, ino);
+                            set_file_xattr(ino, parentname, ADD);
+                        } else if (ino != 0) { //if not excluded
+                            char* stpath = get_file_path(ino);
+                            if (stpath) {
+                                struct stat stbuf;
+                                memset(&stbuf, 0, sizeof(stbuf));
+                                lstat(stpath, &stbuf);
+                                if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                                    char *buf = malloc(stbuf.st_size+1);
+                                    if (buf) {
+                                        readlink(stpath, buf, stbuf.st_size);
+                                        buf[stbuf.st_size] = '\0';
+                                        unlink(stpath);
+                                        create_symlink(ino, entry->d_name, entrpath);
+                                        free(buf);
+                                    }
+                                }
+                                free(stpath);
+                            }
+                        }
+                    }
+                }
+                free(entrpath);
+            }
+        }
+    }
+    closedir(imfd);
+}
+
+void refresh_imports() {
+    char* path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+    if (path) {
+        path[0] = '\0';
+        strcat(path, config.storage);
+        strcat(path, "/imports.txt");
+        FILE *fptr;
+        fptr = fopen(path, "r");
+        free(path);
+        if (fptr) {
+            char *importdir = malloc(PATH_MAX);
+            if (importdir) {
+                while (fgets(importdir, PATH_MAX, fptr) != NULL) {
+                    char *p = strchr(importdir, '\n');
+                    *p = '\0';
+
+                    refresh_importdir(importdir, HOME, HOME_FN);
+
+                    memset(importdir, 0, PATH_MAX);
+                }
+                free(importdir);
+            } else {
+                fatal_error("refresh_imports: Couldn't allocate memory");
+            }
+            fclose(fptr);
+        } else {
+            printf("refresh_imports: imports.txt not found\n");
+        }
+    } else {
+        fatal_error("refresh_imports: Couldn't allocate memory");
+    }
+    //now go through storage and look for remaining broken links. remove if not found with warning message, maybe backup links somewhere
+}
+
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     dirh = kh_init(dirhash);
@@ -1247,6 +1379,10 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
         smtfs_setup();
     }
     closedir(test_fd);
+
+    if (fuseconf->refresh) {
+        refresh_imports();
+    }
 
     if (fuseconf->import) {
         char *importdir = fuseconf->import;
