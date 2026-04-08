@@ -1339,7 +1339,57 @@ void refresh_imports() {
     } else {
         fatal_error("refresh_imports: Couldn't allocate memory");
     }
-    //now go through storage and look for remaining broken links. remove if not found with warning message, maybe backup links somewhere
+    for (int i = 0; i <= 99; i++) {
+        char *filepath = malloc(PATH_MAX);
+        if (filepath) {
+            filepath[0] = '\0';
+            strcat(filepath, config.storage);
+            int length = snprintf(NULL, 0, "/%d", i);
+            char *strino = malloc(length+1);
+            sprintf(strino, "/%d", i);
+            strcat(filepath, strino);
+            free(strino);
+            DIR *imfd = opendir(filepath);
+            if (imfd) {
+                struct dirent *entry = NULL;
+                struct stat stbuf;
+                memset(&stbuf, 0, sizeof(stbuf));
+                while ((entry = readdir(imfd)) != NULL) {
+                    char *entrpath = malloc(PATH_MAX);
+                    if (entrpath) {
+                        entrpath[0] = '\0';
+                        strcat(entrpath, filepath);
+
+                        strcat(entrpath, "/");
+                        strcat(entrpath, entry->d_name);
+
+                        stat(entrpath, &stbuf);
+                        if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                            char *buf = malloc(stbuf.st_size+1);
+                            if (buf) {
+                                readlink(entrpath, buf, stbuf.st_size);
+                                buf[stbuf.st_size] = '\0';
+                                int fd = open(buf, O_RDONLY);
+                                if (fd == -1) {
+                                    printf("Invalid link to import file: %s. Removing file entry %s...\n", buf, entry->d_name);
+                                    ino_t ino;
+                                    sscanf(entry->d_name, "%ld", &ino);
+                                    remove_file(ino);
+                                } else {
+                                    close(fd);
+                                }
+                                free(buf);
+                            }
+                        }
+
+                        free(entrpath);
+                    }
+                }
+                closedir(imfd);
+            }
+        }
+        free(filepath);
+    }
 }
 
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
