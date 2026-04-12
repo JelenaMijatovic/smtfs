@@ -52,6 +52,7 @@ struct fuse_smt_userdata {
     blksize_t blksize;
     char *import;
     char *storage;
+    char *backup;
 };
 
 struct smtfs_config {
@@ -60,6 +61,7 @@ struct smtfs_config {
     dev_t dev;
     blksize_t blksize;
     char *storage;
+    char *backup;
 };
 
 struct smtfs_config config;
@@ -146,6 +148,7 @@ struct dirbuf {
 
 khint_t add_opendir(ino_t ino);
 void remove_opendir(ino_t ino);
+khint_t add_openfile(ino_t ino);
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 void* get_xattr_from_file(ino_t ino, char* name);
 void fatal_error(const char *message);
@@ -262,8 +265,6 @@ int add_filetodir(const char *name, ino_t ino) {
             }
 
             refreshdir(NULL, NULL, dir->ino, 0);
-
-            printf("add_filetodir: adding ino %ld to %ld\n", ino, dir->ino);
             return 0;
         } else {
             return EEXIST;
@@ -274,7 +275,6 @@ int add_filetodir(const char *name, ino_t ino) {
 }
 
 void remove_filefromdir(const char *name, ino_t ino) {
-
     khint_t k;
 
     k = kh_get(dirhash, dirh, name);
@@ -285,7 +285,7 @@ void remove_filefromdir(const char *name, ino_t ino) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
         kb_delp(kbt_fileinos, opendir->fileinos, &ino);
-        k = kh_get(openfilehash, fcache, ino);
+        k = add_openfile(ino);
         if (k != kh_end(fcache)) {
             struct openfileinfo *f = kh_value(fcache, k);
             f->nref--;
@@ -297,7 +297,7 @@ void remove_filefromdir(const char *name, ino_t ino) {
             }
             f->nlink--;
             clock_gettime(CLOCK_REALTIME, &f->ctime);
-            k = kh_get(openfilehash, fcache, dir->ino);
+            k = add_openfile(dir->ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f1 = kh_value(fcache, k);
                 clock_gettime(CLOCK_REALTIME, &f1->ctime);
@@ -305,7 +305,7 @@ void remove_filefromdir(const char *name, ino_t ino) {
             }
         }
 
-        k = kh_get(openfilehash, fcache, dir->ino);
+        k = add_openfile(dir->ino);
         if (k != kh_end(fcache)) {
             struct openfileinfo *f1 = kh_value(fcache, k);
             set_file_xattr(ino, f1->name, RMV);
@@ -580,20 +580,21 @@ void remove_file(ino_t ino) {
     khint_t k, k1;
     kbitr_t itr;
 
-    k = kh_get(openfilehash, fcache, ino);
+    k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
-        mode_t mode = f->mode;
+
         kb_itr_first(kbt_dirinos, f->dirinos, &itr);
         for (; kb_itr_valid(&itr); kb_itr_next(kbt_dirinos, f->dirinos, &itr)) {
             ino_t dirino = kb_itr_key(ino_t, &itr);
-            k1 = kh_get(openfilehash, fcache, dirino);
+            k1 = add_openfile(dirino);
             if (k1 != kh_end(fcache)) {
                 struct openfileinfo *f1 = kh_value(fcache, k1);
                 remove_filefromdir(f1->name, ino);
             }
         }
 
+        mode_t mode = f->mode;
         if ((f->mode & S_IFMT) == S_IFDIR) {
             f->nlink--;
             remove_directory(f->name);
@@ -622,8 +623,6 @@ void remove_file(ino_t ino) {
         newino->nextfr = curr->nextfr;
         curr->nextfr = newino;
     }
-
-    printf("remove_file: removed file %ld\n", ino);
 }
 
 void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
@@ -865,7 +864,7 @@ khint_t add_opendir(ino_t ino) {
                     } else {
                         fatal_error("add_opendir: Couldn't allocate memory\n");
                     }
-                    if (ino != FILES && ino != TAGS) { //loading files for these two would be like loading in the entire FS
+                    if (ino != FILES && ino != TAGS) { //!loading files for these two would be like loading in the entire FS
                         kbitr_t itr;
                         khint_t k;
                         ino_t fino;
@@ -1012,7 +1011,6 @@ void smtfs_load() {
                 dir->ino = ino;
                 dir->name = get_xattr_from_file(ino, "user.smtfs_m.name");
                 k = kh_put(dirhash, dirh, dir->name, &absent);
-                printf("dirh %s\n", dir->name);
                 kh_val(dirh, k) = dir;
             }
             fclose(fptr);
@@ -1287,14 +1285,8 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                                 memset(&stbuf, 0, sizeof(stbuf));
                                 lstat(stpath, &stbuf);
                                 if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                                    char *buf = malloc(stbuf.st_size+1);
-                                    if (buf) {
-                                        readlink(stpath, buf, stbuf.st_size);
-                                        buf[stbuf.st_size] = '\0';
-                                        unlink(stpath);
-                                        create_symlink(ino, entry->d_name, entrpath);
-                                        free(buf);
-                                    }
+                                    unlink(stpath);
+                                    create_symlink(ino, entry->d_name, entrpath);
                                 }
                                 free(stpath);
                             }
@@ -1323,6 +1315,7 @@ void refresh_imports() {
                 while (fgets(importdir, PATH_MAX, fptr) != NULL) {
                     char *p = strchr(importdir, '\n');
                     *p = '\0';
+                    printf("refreshing import dir %s...\n", importdir);
 
                     refresh_importdir(importdir, HOME, HOME_FN);
 
@@ -1355,34 +1348,37 @@ void refresh_imports() {
                 struct stat stbuf;
                 memset(&stbuf, 0, sizeof(stbuf));
                 while ((entry = readdir(imfd)) != NULL) {
-                    char *entrpath = malloc(PATH_MAX);
-                    if (entrpath) {
-                        entrpath[0] = '\0';
-                        strcat(entrpath, filepath);
+                    if (strncmp(entry->d_name, ".", 1)) {
+                        char *entrpath = malloc(PATH_MAX);
+                        if (entrpath) {
+                            entrpath[0] = '\0';
+                            strcat(entrpath, filepath);
 
-                        strcat(entrpath, "/");
-                        strcat(entrpath, entry->d_name);
+                            strcat(entrpath, "/");
+                            strcat(entrpath, entry->d_name);
 
-                        stat(entrpath, &stbuf);
-                        if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                            char *buf = malloc(stbuf.st_size+1);
-                            if (buf) {
-                                readlink(entrpath, buf, stbuf.st_size);
-                                buf[stbuf.st_size] = '\0';
-                                int fd = open(buf, O_RDONLY);
-                                if (fd == -1) {
-                                    printf("Invalid link to import file: %s. Removing file entry %s...\n", buf, entry->d_name);
-                                    ino_t ino;
-                                    sscanf(entry->d_name, "%ld", &ino);
-                                    remove_file(ino);
-                                } else {
-                                    close(fd);
+                            lstat(entrpath, &stbuf);
+                            if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                                char *buf = malloc(stbuf.st_size+1);
+                                if (buf) {
+                                    readlink(entrpath, buf, stbuf.st_size);
+                                    buf[stbuf.st_size] = '\0';
+                                    int fd = open(buf, O_RDONLY);
+                                    if (fd == -1) {
+                                        printf("Invalid link to import file: %s. Removing file entry %s...\n", buf, entry->d_name);
+                                        ino_t ino;
+                                        sscanf(entry->d_name, "%ld", &ino);
+                                        remove_file(ino);
+                                    } else {
+                                        close(fd);
+                                    }
+                                    free(buf);
                                 }
-                                free(buf);
                             }
-                        }
 
-                        free(entrpath);
+                            memset(&stbuf, 0, sizeof(stbuf));
+                            free(entrpath);
+                        }
                     }
                 }
                 closedir(imfd);
@@ -1409,6 +1405,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     config.passthrough = fuseconf->passthrough;
     config.root_fd = fuseconf->root_fd;
     config.storage = fuseconf->storage;
+    config.backup = fuseconf->backup;
     config.dev = fuseconf->dev;
     config.blksize = fuseconf->blksize;
 
@@ -1530,6 +1527,8 @@ static void smt_destroy(void *userdata) {
         close(newfd);
     }
 
+    //!backup
+
     printf("smt_destroy: Finished cleanup\n");
 }
 
@@ -1555,8 +1554,6 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_
 }
 
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
-
-    //printf("refreshdir in directory -> %ld\n", ino);
 
     struct openfileinfo *f = NULL;
     struct dirinfo *dir = NULL;
@@ -1667,14 +1664,10 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     }
 }
 
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize)
-{
-    printf("reply_buf_limited called s %ld maxs %ld, offset %ld\n", bufsize, maxsize, off);
+static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
     if (off < maxsize) {
-        printf("off < s\n");
         return fuse_reply_buf(req, buf, min(bufsize, maxsize));
     } else {
-        printf("off > s\n");
         return fuse_reply_buf(req, NULL, 0);
     }
 }
@@ -1972,7 +1965,6 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
 {
     (void)fi;
     struct dirbuf b;
-    printf("smt_readdir: %ld\n", ino);
 
     memset(&b, 0, sizeof(b));
 
@@ -1987,7 +1979,6 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
         kb_itr_first(kbt_fnames, opendir->fnames, &itr);
         for (; kb_itr_valid(&itr); kb_itr_next(kbt_fnames, opendir->fnames, &itr)) {
             struct opendirentry *fin = &kb_itr_key(struct opendirentry, &itr);
-            printf("smt_readdir: %s %ld\n", fin->name, fin->ino);
             dirbuf_add(req, &b, fin->name, fin->ino);
         }
     }
@@ -2121,10 +2112,8 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     kb_itr_first(kbt_dirinos, f->dirinos, &itr);
                     for (; kb_itr_valid(&itr); kb_itr_next(kbt_dirinos, f->dirinos, &itr)) {
                         ino_t dirino = kb_itr_key(ino_t, &itr);
-                        printf("%ld\n", dirino);
                         k = kh_get(opendirhash, opendirh, dirino);
                         if (k != kh_end(opendirh)) {
-                            printf("%ld\n", dirino);
                             refreshdir(NULL, NULL, dirino, 0);
                         }
                     }
@@ -2156,12 +2145,9 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 	fuse_reply_err(req, res);
 }
 
-static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi)
-{
+static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi) {
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
-
-    printf("smt_create called with filename %s and mode %d\n", name, mode);
 
     khint_t k = kh_get(openfilehash, fcache, parent);
     if (k != kh_end(fcache)) {
@@ -2245,7 +2231,6 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
 
 static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     (void) fi;
-    printf("smt_read called s %ld, offset %ld\n", size, off);
 
     khint_t k = kh_get(openfilehash, fcache, ino);
     if (k == kh_end(fcache)) {
@@ -2353,8 +2338,7 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
 }
 
 static void smt_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *fi) {
-    printf("smt_write called on file %ld\n", ino);
-    printf("offset = %lu and size=%zu\n", off, size);
+
     struct stat stbuf;
     memset(&stbuf, 0, sizeof(stbuf));
 
@@ -2508,10 +2492,8 @@ int recursive_dir(ino_t dirino, ino_t ino) {
     return saverr;
 }
 
-static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size, int flags)
-{
+static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size, int flags) {
     int saverr = EPERM;
-    printf("smt_setxattr: %ld %s %s", ino, name, value);
 
     if (ino <= SYSDIR) { //don't allow tagging system directories
         fuse_reply_err(req, saverr);
@@ -2705,13 +2687,20 @@ int main(int argc, char **argv)
     conf.blksize = stbuf.st_blksize;
 
     char *storage = malloc(PATH_MAX);
+    char *backup = malloc(PATH_MAX);
     char *dirpath = strdup(dirname(devfile));
-    if (storage) {
+    if (storage && backup) {
         storage[0] = '\0';
         strcat(storage, dirpath);
         strcat(storage, "/.smtfs_storage");
         mkdir(storage, 0700);
         conf.storage = storage;
+
+        backup[0] = '\0';
+        strcat(backup, dirpath);
+        strcat(backup, "/.smtfs_backup");
+        mkdir(backup, 0700);
+        conf.backup = backup;
     } else {
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
@@ -2770,6 +2759,7 @@ errlabel_two:
     closedir(rootdir);
     free(conf.import);
     free(conf.storage);
+    free(conf.backup);
     free(dirpath);
     close(conf.root_fd);
     fuse_opt_free_args(&args);
