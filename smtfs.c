@@ -5,6 +5,7 @@
 #include "klib/khash.h"
 #include "klib/ksort.h"
 #include "klib/kbtree.h"
+#include "cp.c"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,7 +154,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 void* get_xattr_from_file(ino_t ino, char* name);
 void fatal_error(const char *message);
 
-char* get_file_path(ino_t ino) {
+char* get_ino_path(ino_t ino) {
     char *filepath = malloc(PATH_MAX);
     if (filepath) {
         filepath[0] = '\0';
@@ -168,6 +169,16 @@ char* get_file_path(ino_t ino) {
         sprintf(strino, "/%ld", ino);
         strcat(filepath, strino);
         free(strino);
+    }
+    return filepath;
+}
+
+char* get_file_path(char* root, char* filename) {
+    char* filepath = malloc(strlen(root) + strlen(filename)+1);
+    if (filepath) {
+        filepath[0] = '\0';
+        strcat(filepath, root);
+        strcat(filepath, filename);
     }
     return filepath;
 }
@@ -198,7 +209,7 @@ struct dirinfo* add_directory(ino_t ino, const char* name) {
 
 void set_file_xattr(ino_t ino, const char *tag, int mode) {
 
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
     char *filename = malloc(PATH_MAX);
 
     if (filepath && filename)
@@ -341,7 +352,7 @@ void remove_directory(const char *name) {
 
 int open_file(ino_t ino, const char* name, mode_t mode) {
     int newfd = 0;
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
 
     if (filepath) {
         if ((mode & S_IFMT) == S_IFDIR) {
@@ -366,7 +377,7 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
 }
 
 void create_symlink(ino_t ino, const char* name, char* target) {
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
 
     if (filepath) {
         symlink(target, filepath);
@@ -379,7 +390,7 @@ void create_symlink(ino_t ino, const char* name, char* target) {
 }
 
 void rename_symlink(ino_t ino, char* newname) {
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
 
     if (filepath) {
         struct stat stbuf;
@@ -551,7 +562,7 @@ ino_t add_file(off_t size, const char *name, mode_t mode) {
 }
 
 void delete_file_on_disk(ino_t ino, mode_t mode) {
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
 
     if (filepath) {
         struct stat stbuf;
@@ -627,7 +638,7 @@ void remove_file(ino_t ino) {
 
 void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
     kbitr_t itr;
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
 
     if (filepath) {
         strcat(filepath, "/contents.txt");
@@ -652,7 +663,7 @@ void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
 }
 
 void append_dir_contents(ino_t dirino, ino_t ino) {
-    char *filepath = get_file_path(dirino);
+    char *filepath = get_ino_path(dirino);
 
     if (filepath) {
         strcat(filepath, "/contents.txt");
@@ -699,7 +710,7 @@ khint_t add_openfile(ino_t ino) {
     memset(&stbuf, 0, sizeof(stbuf));
     memset(&stxbuf, 0, sizeof(stxbuf));
     int absent;
-    char *filepath = get_file_path(ino);
+    char *filepath = get_ino_path(ino);
 
     if (filepath) {
         stat(filepath, &stbuf);
@@ -760,7 +771,7 @@ void remove_openfile(ino_t ino) {
         struct openfileinfo *f = kh_val(fcache, k);
         f->nref--;
         if (!f->nref) {
-            char *filepath = get_file_path(ino);
+            char *filepath = get_ino_path(ino);
             if (filepath) {
                 setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
                 setxattr(filepath, "user.smtfs_m.nlink", &f->nlink, sizeof(f->nlink), 0);
@@ -844,7 +855,7 @@ khint_t add_opendir(ino_t ino) {
                     ++f->nref;
 
                     //load directory contents
-                    char *filepath = get_file_path(ino);
+                    char *filepath = get_ino_path(ino);
                     if (filepath) {
                         strcat(filepath, "/contents.txt");
 
@@ -945,7 +956,7 @@ void smtfs_setup() {
 
 void* get_xattr_from_file(ino_t ino, char* name) {
     char *buf = NULL;
-    char *path = get_file_path(ino);
+    char *path = get_ino_path(ino);
 
     if (path) {
         int size = getxattr(path, name, 0, 0);
@@ -962,23 +973,17 @@ void smtfs_load() {
     khint_t k;
     int absent;
 
-    char *path = malloc(PATH_MAX);
+    char *path = get_file_path(config.storage, "/free.txt");
     if (path) {
-        path[0] = '\0';
-        strcat(path, config.storage);
-        strcat(path, "/free.txt");
-
         FILE *fptr;
         fptr = fopen(path, "r");
-        free(path);
         if (fptr) {
             ino_t ino;
-
             struct freeino *prev = malloc(sizeof(struct freeino));
             fscanf(fptr, "%lu\n", &prev->ino); //first inode guaranteed
             freemap = prev;
-
             struct freeino *curr = NULL;
+
             while (fscanf(fptr, "%lu\n", &ino) != EOF) {
                 curr = malloc(sizeof(struct freeino));
                 curr->ino = ino;
@@ -991,21 +996,18 @@ void smtfs_load() {
         } else {
             fatal_error("smtfs_load: Couldn't read free.txt!");
         }
+        free(path);
     } else {
         fatal_error("smtfs_load: Couldn't allocate memory");
     }
 
-    path = malloc(PATH_MAX);
+    path = get_file_path(config.storage, "/dirs.txt");
     if (path) {
-        path[0] = '\0';
-        strcat(path, config.storage);
-        strcat(path, "/dirs.txt");
-
         FILE *fptr;
         fptr = fopen(path, "r");
-        free(path);
         if (fptr) {
             ino_t ino;
+
             while (fscanf(fptr, "%lu\n", &ino) != EOF) {
                 struct dirinfo *dir = malloc(sizeof(struct dirinfo));
                 dir->ino = ino;
@@ -1013,10 +1015,12 @@ void smtfs_load() {
                 k = kh_put(dirhash, dirh, dir->name, &absent);
                 kh_val(dirh, k) = dir;
             }
+
             fclose(fptr);
         } else {
             fatal_error("smtfs_load: Couldn't read dirs.txt!");
         }
+        free(path);
     } else {
         fatal_error("smtfs_load: Couldn't allocate memory");
     }
@@ -1028,14 +1032,10 @@ void smtfs_load() {
 }
 
 int is_import_new(char* importroot) {
-    char* path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+    char* path = get_file_path(config.storage, "/imports.txt");
     if (path) {
-        path[0] = '\0';
-        strcat(path, config.storage);
-        strcat(path, "/imports.txt");
         FILE *fptr;
         fptr = fopen(path, "r");
-        free(path);
         if (fptr) {
             char *importdir = malloc(PATH_MAX);
             if (importdir) {
@@ -1058,6 +1058,7 @@ int is_import_new(char* importroot) {
         } else { //imports.txt not found, first import
             return 1;
         }
+        free(path);
     } else {
         fatal_error("is_import_new: Couldn't allocate memory");
     }
@@ -1189,11 +1190,8 @@ void import_dir(char* importroot) {
 
 void add_import(char* importdir) {
     if (is_import_new(importdir)) {
-        char* path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+        char* path = get_file_path(config.storage, "/imports.txt");
         if (path) {
-            path[0] = '\0';
-            strcat(path, config.storage);
-            strcat(path, "/imports.txt");
             int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0777);
             if (fd) {
                 write(fd, importdir, strlen(importdir));
@@ -1279,7 +1277,7 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                             append_dir_contents(parent, ino);
                             set_file_xattr(ino, parentname, ADD);
                         } else if (ino != 0) { //if not excluded
-                            char* stpath = get_file_path(ino);
+                            char* stpath = get_ino_path(ino);
                             if (stpath) {
                                 struct stat stbuf;
                                 memset(&stbuf, 0, sizeof(stbuf));
@@ -1301,11 +1299,8 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
 }
 
 void refresh_imports() {
-    char* path = malloc(strlen(config.storage) + strlen("/imports.txt")+1);
+    char* path = get_file_path(config.storage, "/imports.txt");
     if (path) {
-        path[0] = '\0';
-        strcat(path, config.storage);
-        strcat(path, "/imports.txt");
         FILE *fptr;
         fptr = fopen(path, "r");
         free(path);
@@ -1411,11 +1406,8 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     //test if storage is set up
     DIR *test_fd = NULL;
-    char *path = malloc(strlen(config.storage) + strlen("/0")+1);
+    char *path = get_file_path(config.storage, "/0");
     if (path) {
-        path[0] = '\0';
-        strcat(path, config.storage);
-        strcat(path, "/0");
         test_fd = opendir(path);
         free(path);
     }
@@ -1447,9 +1439,20 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
 }
 
+void copy_to_backup(char* name) {
+    char* backuppath = get_file_path(config.backup, name);
+    char* ogpath = get_file_path(config.storage, name);
+    if (backuppath && ogpath) {
+        cp(backuppath, ogpath);
+        free(backuppath);
+        free(ogpath);
+    }
+}
+
 static void smt_destroy(void *userdata) {
 
     printf("smt_destroy: Shutting down...\n");
+    int ok = 1;
 
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
@@ -1458,11 +1461,8 @@ static void smt_destroy(void *userdata) {
     kh_destroy(opendirhash, opendirh);
     free(lvisit.visits);
 
-    char *filepath = malloc(strlen(config.storage) + strlen("/dirs.txt")+1);
+    char *filepath = get_file_path(config.storage, "/dirs.txt");
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        strcat(filepath, "/dirs.txt");
         int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
             char *strino;
@@ -1477,6 +1477,7 @@ static void smt_destroy(void *userdata) {
                 }
         } else {
             printf("smt_destroy: Couldn't write to dirs.txt!\n");
+            ok = 0;
         }
         free(filepath);
         close(newfd);
@@ -1499,11 +1500,8 @@ static void smt_destroy(void *userdata) {
         }
     kh_destroy(openfilehash, fcache);
 
-    filepath = malloc(strlen(config.storage) + strlen("/free.txt")+1);
+    filepath = get_file_path(config.storage, "/free.txt");
     if (filepath) {
-        filepath[0] = '\0';
-        strcat(filepath, config.storage);
-        strcat(filepath, "/free.txt");
         int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
             int length;
@@ -1522,12 +1520,34 @@ static void smt_destroy(void *userdata) {
             }
         } else {
             printf("smt_destroy: Couldn't write to free.txt!\n");
+            ok = 0;
         }
         free(filepath);
         close(newfd);
     }
 
-    //!backup
+    if (ok) {
+        filepath = get_file_path(config.storage, "/OK");
+        if (filepath) {
+            int okfd = open(filepath, O_RDONLY | O_CREAT, 0777);
+            if (okfd) {
+
+                copy_to_backup("/dirs.txt");
+                copy_to_backup("/free.txt");
+                copy_to_backup("/imports.txt");
+                //iterate through dirs
+                //go through entries
+                //for directories, mkdir and ctb for each file
+                //links txt ->link in content, xattr on file
+                //normal files txt -> xattr on file
+
+                close(okfd);
+            } else {
+                printf("smt_destroy: Couldn't create OK status file, backup will be skipped...\n");
+            }
+            free(filepath);
+        }
+    }
 
     printf("smt_destroy: Finished cleanup\n");
 }
@@ -2197,7 +2217,7 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
         if ((f->mode & S_IFMT) != S_IFDIR) {
-            char *filepath = get_file_path(ino);
+            char *filepath = get_ino_path(ino);
             if (filepath) {
                 int fd;
                 int32_t flag = 0;
