@@ -1527,25 +1527,119 @@ static void smt_destroy(void *userdata) {
     }
 
     if (ok) {
-        filepath = get_file_path(config.storage, "/OK");
-        if (filepath) {
-            int okfd = open(filepath, O_RDONLY | O_CREAT, 0777);
+        char* okpath = get_file_path(config.storage, "/OK");
+        if (okpath) {
+            int okfd = open(okpath, O_RDONLY | O_CREAT, 0777);
             if (okfd) {
 
                 copy_to_backup("/dirs.txt");
                 copy_to_backup("/free.txt");
                 copy_to_backup("/imports.txt");
-                //iterate through dirs
-                //go through entries
-                //for directories, mkdir and ctb for each file
-                //links txt ->link in content, xattr on file
-                //normal files txt -> xattr on file
+
+                for (int i = 0; i <= 99; i++) {
+                    filepath = malloc(PATH_MAX);
+                    if (filepath) {
+                        filepath[0] = '\0';
+                        strcat(filepath, config.storage);
+                        int length = snprintf(NULL, 0, "/%d", i);
+                        char *strino = malloc(length+1);
+                        sprintf(strino, "/%d", i);
+                        strcat(filepath, strino);
+                        DIR *imfd = opendir(filepath);
+                        if (imfd) {
+                            char *bdirpath = get_file_path(config.backup, strino);
+                            if (bdirpath) {
+                                mkdir(bdirpath, 0777);
+                                free(bdirpath);
+                            }
+                            struct dirent *entry = NULL;
+                            struct stat stbuf;
+                            memset(&stbuf, 0, sizeof(stbuf));
+                            while ((entry = readdir(imfd)) != NULL) {
+                                if (strncmp(entry->d_name, ".", 1)) {
+                                    char *entrpath = malloc(PATH_MAX);
+                                    char *part = malloc(5);
+                                    if (part) {
+                                        part[0] = '\0';
+                                        strcat(part, strino);
+                                        strcat(part, "/");
+                                        strcat(part, entry->d_name);
+                                    }
+                                    char *backuppath = get_file_path(config.backup, part);
+                                    if (entrpath && backuppath) {
+                                        entrpath[0] = '\0';
+                                        strcat(entrpath, filepath);
+                                        strcat(entrpath, "/");
+                                        strcat(entrpath, entry->d_name);
+
+                                        lstat(entrpath, &stbuf);
+                                        if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+                                            mkdir(backuppath, 0777);
+
+                                            char *contpathb = get_file_path(backuppath, "/contents.txt");
+                                            char *contpaths = get_file_path(entrpath, "/contents.txt");
+                                            if (contpathb && contpaths) {
+                                                cp(contpathb, contpaths);
+                                                free(contpathb);
+                                                free(contpaths);
+                                            }
+                                        } else if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                                            int fd = open(backuppath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
+                                            char *buf = malloc(stbuf.st_size + 1);
+                                            readlink(entrpath, buf, stbuf.st_size);
+                                            buf[stbuf.st_size] = '\0';
+                                            write(fd, buf, stbuf.st_size);
+                                            free(buf);
+                                            close(fd);
+                                        } else {
+                                            int fd = open(backuppath, O_RDONLY | O_CREAT, 0777);
+                                            close(fd);
+                                        }
+
+                                        int size = listxattr(entrpath, 0, 0);
+                                        if (size > 0) {
+                                            char* list = malloc(size);
+                                            if (list) {
+                                                listxattr(entrpath, list, size);
+                                                int sum = 0;
+                                                char *s = list;
+                                                while (sum < size) {
+                                                    sum += strlen(s)+1;
+                                                    if (s) {
+                                                        int psize = getxattr(entrpath, s, 0, 0);
+                                                        char *buf = malloc(psize);
+                                                        if (buf) {
+                                                            getxattr(entrpath, s, buf, psize);
+                                                            setxattr(backuppath, s, buf, psize, 0);
+                                                            free(buf);
+                                                        }
+                                                    }
+                                                    s = strchr(s, '\0');
+                                                    s++;
+                                                }
+                                            }
+                                            free(list);
+                                        }
+
+                                        memset(&stbuf, 0, sizeof(stbuf));
+                                        free(entrpath);
+                                        free(part);
+                                        free(backuppath);
+                                    }
+                                }
+                            }
+                            closedir(imfd);
+                        }
+                        free(strino);
+                        free(filepath);
+                    }
+                }
 
                 close(okfd);
             } else {
                 printf("smt_destroy: Couldn't create OK status file, backup will be skipped...\n");
             }
-            free(filepath);
+            free(okpath);
         }
     }
 
