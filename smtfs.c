@@ -154,11 +154,11 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 void* get_xattr_from_file(ino_t ino, char* name);
 void fatal_error(const char *message);
 
-char* get_ino_path(ino_t ino) {
+char* get_ino_path(char* root, ino_t ino) {
     char *filepath = malloc(PATH_MAX);
     if (filepath) {
         filepath[0] = '\0';
-        strcat(filepath, config.storage);
+        strcat(filepath, root);
         int length = snprintf(NULL, 0, "/%ld", ino / DIRSPLIT);
         char *strino = malloc(length+1);
         sprintf(strino, "/%ld", ino / DIRSPLIT);
@@ -209,11 +209,10 @@ struct dirinfo* add_directory(ino_t ino, const char* name) {
 
 void set_file_xattr(ino_t ino, const char *tag, int mode) {
 
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
     char *filename = malloc(PATH_MAX);
 
-    if (filepath && filename)
-    {
+    if (filepath && filename) {
         filename[0] = '\0';
         strcat(filename, "user.smtfs.");
         int length = snprintf(NULL, 0, "%s", tag);
@@ -352,7 +351,7 @@ void remove_directory(const char *name) {
 
 int open_file(ino_t ino, const char* name, mode_t mode) {
     int newfd = 0;
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
         if ((mode & S_IFMT) == S_IFDIR) {
@@ -377,7 +376,7 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
 }
 
 void create_symlink(ino_t ino, const char* name, char* target) {
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
         symlink(target, filepath);
@@ -390,7 +389,7 @@ void create_symlink(ino_t ino, const char* name, char* target) {
 }
 
 void rename_symlink(ino_t ino, char* newname) {
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
         struct stat stbuf;
@@ -562,7 +561,7 @@ ino_t add_file(off_t size, const char *name, mode_t mode) {
 }
 
 void delete_file_on_disk(ino_t ino, mode_t mode) {
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
         struct stat stbuf;
@@ -638,7 +637,7 @@ void remove_file(ino_t ino) {
 
 void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
     kbitr_t itr;
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
         strcat(filepath, "/contents.txt");
@@ -663,7 +662,7 @@ void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
 }
 
 void append_dir_contents(ino_t dirino, ino_t ino) {
-    char *filepath = get_ino_path(dirino);
+    char *filepath = get_ino_path(config.storage, dirino);
 
     if (filepath) {
         strcat(filepath, "/contents.txt");
@@ -710,7 +709,7 @@ khint_t add_openfile(ino_t ino) {
     memset(&stbuf, 0, sizeof(stbuf));
     memset(&stxbuf, 0, sizeof(stxbuf));
     int absent;
-    char *filepath = get_ino_path(ino);
+    char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
         stat(filepath, &stbuf);
@@ -728,6 +727,11 @@ khint_t add_openfile(ino_t ino) {
 
         f->dirinos = kb_init(kbt_dirinos, KB_DEFAULT_SIZE);
         int size = listxattr(filepath, 0, 0);
+        if (size <= 0) {
+            free(filepath);
+            filepath = get_ino_path(config.backup, ino);
+            size = listxattr(filepath, 0, 0);
+        }
         if (size > 0) {
             char* list = malloc(size);
             if (list) {
@@ -771,7 +775,7 @@ void remove_openfile(ino_t ino) {
         struct openfileinfo *f = kh_val(fcache, k);
         f->nref--;
         if (!f->nref) {
-            char *filepath = get_ino_path(ino);
+            char *filepath = get_ino_path(config.storage, ino);
             if (filepath) {
                 setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
                 setxattr(filepath, "user.smtfs_m.nlink", &f->nlink, sizeof(f->nlink), 0);
@@ -855,7 +859,7 @@ khint_t add_opendir(ino_t ino) {
                     ++f->nref;
 
                     //load directory contents
-                    char *filepath = get_ino_path(ino);
+                    char *filepath = get_ino_path(config.storage, ino);
                     if (filepath) {
                         strcat(filepath, "/contents.txt");
 
@@ -956,7 +960,7 @@ void smtfs_setup() {
 
 void* get_xattr_from_file(ino_t ino, char* name) {
     char *buf = NULL;
-    char *path = get_ino_path(ino);
+    char *path = get_ino_path(config.storage, ino);
 
     if (path) {
         int size = getxattr(path, name, 0, 0);
@@ -1036,6 +1040,7 @@ int is_import_new(char* importroot) {
     if (path) {
         FILE *fptr;
         fptr = fopen(path, "r");
+        free(path);
         if (fptr) {
             char *importdir = malloc(PATH_MAX);
             if (importdir) {
@@ -1058,7 +1063,6 @@ int is_import_new(char* importroot) {
         } else { //imports.txt not found, first import
             return 1;
         }
-        free(path);
     } else {
         fatal_error("is_import_new: Couldn't allocate memory");
     }
@@ -1277,7 +1281,7 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                             append_dir_contents(parent, ino);
                             set_file_xattr(ino, parentname, ADD);
                         } else if (ino != 0) { //if not excluded
-                            char* stpath = get_ino_path(ino);
+                            char* stpath = get_ino_path(config.storage, ino);
                             if (stpath) {
                                 struct stat stbuf;
                                 memset(&stbuf, 0, sizeof(stbuf));
@@ -1530,7 +1534,7 @@ static void smt_destroy(void *userdata) {
         char* okpath = get_file_path(config.storage, "/OK");
         if (okpath) {
             int okfd = open(okpath, O_RDONLY | O_CREAT, 0777);
-            if (okfd) {
+            if (okfd) { //smtfs healthy, ok to create backup
 
                 copy_to_backup("/dirs.txt");
                 copy_to_backup("/free.txt");
@@ -1550,6 +1554,20 @@ static void smt_destroy(void *userdata) {
                             char *bdirpath = get_file_path(config.backup, strino);
                             if (bdirpath) {
                                 mkdir(bdirpath, 0777);
+                                DIR *bkfd = opendir(bdirpath);
+                                struct dirent *entry = NULL;
+                                while ((entry = readdir(bkfd)) != NULL) { //delete existing backup first
+                                    if (strncmp(entry->d_name, ".", 1)) {
+                                        ino_t ino;
+                                        sscanf(entry->d_name, "%ld", &ino);
+                                        char *entrpath = get_ino_path(config.storage, ino);
+                                        if (entrpath) {
+                                            remove(entrpath);
+                                            free(entrpath);
+                                        }
+                                    }
+                                }
+                                closedir(bkfd);
                                 free(bdirpath);
                             }
                             struct dirent *entry = NULL;
@@ -1557,21 +1575,11 @@ static void smt_destroy(void *userdata) {
                             memset(&stbuf, 0, sizeof(stbuf));
                             while ((entry = readdir(imfd)) != NULL) {
                                 if (strncmp(entry->d_name, ".", 1)) {
-                                    char *entrpath = malloc(PATH_MAX);
-                                    char *part = malloc(5);
-                                    if (part) {
-                                        part[0] = '\0';
-                                        strcat(part, strino);
-                                        strcat(part, "/");
-                                        strcat(part, entry->d_name);
-                                    }
-                                    char *backuppath = get_file_path(config.backup, part);
+                                    ino_t ino;
+                                    sscanf(entry->d_name, "%ld", &ino);
+                                    char *entrpath = get_ino_path(config.storage, ino);
+                                    char *backuppath = get_ino_path(config.backup, ino);
                                     if (entrpath && backuppath) {
-                                        entrpath[0] = '\0';
-                                        strcat(entrpath, filepath);
-                                        strcat(entrpath, "/");
-                                        strcat(entrpath, entry->d_name);
-
                                         lstat(entrpath, &stbuf);
                                         if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
                                             mkdir(backuppath, 0777);
@@ -1623,7 +1631,6 @@ static void smt_destroy(void *userdata) {
 
                                         memset(&stbuf, 0, sizeof(stbuf));
                                         free(entrpath);
-                                        free(part);
                                         free(backuppath);
                                     }
                                 }
@@ -2311,7 +2318,7 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
         if ((f->mode & S_IFMT) != S_IFDIR) {
-            char *filepath = get_ino_path(ino);
+            char *filepath = get_ino_path(config.storage, ino);
             if (filepath) {
                 int fd;
                 int32_t flag = 0;
