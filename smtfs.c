@@ -593,7 +593,6 @@ void remove_file(ino_t ino) {
     k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
-
         kb_itr_first(kbt_dirinos, f->dirinos, &itr);
         for (; kb_itr_valid(&itr); kb_itr_next(kbt_dirinos, f->dirinos, &itr)) {
             ino_t dirino = kb_itr_key(ino_t, &itr);
@@ -748,7 +747,7 @@ khint_t add_openfile(ino_t ino) {
                         if (k != kh_end(dirh)) {
                             struct dirinfo *dir = kh_val(dirh, k);
                             ino_t *ino = kb_getp(kbt_dirinos, f->dirinos, &dir->ino);
-                            if (!ino) kb_putp(kbt_dirinos, f->dirinos, &dir->ino);
+                            if (!ino) kb_put(kbt_dirinos, f->dirinos, dir->ino);
                         }
                     }
                     s = strchr(s, '\0');
@@ -977,7 +976,13 @@ void smtfs_load() {
     khint_t k;
     int absent;
 
-    char *path = get_file_path(config.storage, "/free.txt");
+    char* path = get_file_path(config.storage, "/OK");
+    if (path) { //remove status file from last shutdown
+        remove(path);
+        free(path);
+    }
+
+    path = get_file_path(config.storage, "/free.txt");
     if (path) {
         FILE *fptr;
         fptr = fopen(path, "r");
@@ -1560,7 +1565,7 @@ static void smt_destroy(void *userdata) {
                                     if (strncmp(entry->d_name, ".", 1)) {
                                         ino_t ino;
                                         sscanf(entry->d_name, "%ld", &ino);
-                                        char *entrpath = get_ino_path(config.storage, ino);
+                                        char *entrpath = get_ino_path(config.backup, ino);
                                         if (entrpath) {
                                             remove(entrpath);
                                             free(entrpath);
