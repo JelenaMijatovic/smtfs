@@ -1287,6 +1287,7 @@ void add_import(char* importdir) {
                 write(fd, "\n", 1);
                 close(fd);
 
+                printf("Importing directory %s...\n", importdir);
                 import_dir(importdir);
             } else {
                 printf("add_import: Couldn't open imports.txt, skipping import\n");
@@ -1633,6 +1634,15 @@ static void smt_destroy(void *userdata) {
         }
         free(filepath);
         close(newfd);
+    }
+
+    filepath = get_file_path(config.storage, "/imports.txt");
+    if (filepath) {
+        int fd = open(filepath, O_RDONLY | O_CREAT, 0777);
+        if (fd) {
+            close(fd);
+        }
+        free(filepath);
     }
 
     if (ok) {
