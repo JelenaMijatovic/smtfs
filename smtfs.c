@@ -1395,17 +1395,28 @@ void refresh_imports() {
         free(path);
         if (fptr) {
             char *importdir = malloc(PATH_MAX);
+            char *name = malloc(PATH_MAX);
             if (importdir) {
                 while (fgets(importdir, PATH_MAX, fptr) != NULL) {
                     char *p = strchr(importdir, '\n');
                     *p = '\0';
-                    printf("refreshing import dir %s...\n", importdir);
+                    strcpy(name, basename(importdir));
+                    khint_t k = kh_get(dirhash, dirh, name);
+                    if (k != kh_end(dirh)) {
+                        struct dirinfo *dir = kh_val(dirh, k);
 
-                    refresh_importdir(importdir, HOME, HOME_FN);
+                        printf("refreshing import dir %s...\n", importdir);
+
+                        refresh_importdir(importdir, dir->ino, name);
+                    } else {
+                        printf("refresh_imports: Couldn't find import directory %s in smtfs\n", name);
+                    }
 
                     memset(importdir, 0, PATH_MAX);
+                    memset(name, 0, PATH_MAX);
                 }
                 free(importdir);
+                free(name);
             } else {
                 fatal_error("refresh_imports: Couldn't allocate memory");
             }
@@ -1510,14 +1521,11 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     if (test_fd) {
         smtfs_load();
+        refresh_imports();
     } else {
         smtfs_setup();
     }
     closedir(test_fd);
-
-    if (fuseconf->refresh) {
-        refresh_imports();
-    }
 
     if (fuseconf->import) {
         char *importdir = fuseconf->import;
