@@ -1375,6 +1375,38 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                                 if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
                                     unlink(stpath);
                                     create_symlink(ino, entry->d_name, entrpath);
+
+                                    int size = listxattr(entrpath, 0, 0);
+                                    if (size > 0) {
+                                        char* list = malloc(size);
+                                        if (list) {
+                                            listxattr(entrpath, list, size);
+                                            int sum = 0;
+                                            char *s = list;
+                                            char *p;
+                                            while (sum < size) {
+                                                sum += strlen(s)+1;
+                                                p = strstr(s, "user.smtfs.");
+                                                if (p) {
+                                                    p = p + strlen("user.smtfs.");
+                                                    khint_t k = kh_get(dirhash, dirh, p);
+                                                    if (k != kh_end(dirh)) {
+                                                        struct dirinfo *dir = kh_val(dirh, k);
+                                                        if (dir->ino == parent) {
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                s = strchr(s, '\0');
+                                                s++;
+                                            }
+                                            if (sum >= size) {
+                                                append_dir_contents(parent, ino);
+                                                set_file_xattr(ino, parentname, ADD);
+                                            }
+                                        }
+                                        free(list);
+                                    }
                                 }
                                 free(stpath);
                             }
@@ -2854,8 +2886,8 @@ static struct fuse_opt smtfs_opts[] = {
      SMTFS_OPT("import=%s",         import, 0),
      SMTFS_OPT("-p",                passthrough, 1),
      SMTFS_OPT("--passthrough",     passthrough, 1),
-     SMTFS_OPT("-r",                refresh, 1),
-     SMTFS_OPT("--refresh",         refresh, 1),
+     SMTFS_OPT("-li",               refresh, 1),
+     SMTFS_OPT("--list-imports",    refresh, 1),
      FUSE_OPT_KEY("-V",             KEY_VERSION),
      FUSE_OPT_KEY("--version",      KEY_VERSION),
      FUSE_OPT_KEY("-h",             KEY_HELP),
@@ -2885,20 +2917,26 @@ int main(int argc, char **argv)
     if (opts.show_help) {
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
         printf("smtfs options:\n"
-               "    -r   --refresh         refresh imports\n"
-               "    -p   --passthrough     pass operations to the import directory\n"
+               "    -import=source_dir[&dir2]    import existing directories\n"
+               "    -p   --passthrough           pass operations to the import directory\n"
                "fuse options:\n");
         fuse_cmdline_help();
         fuse_lowlevel_help();
+        free(opts.mountpoint);
+        fuse_opt_free_args(&args);
         return 0;
     }
     if (opts.show_version) {
         printf("FUSE library version %s\n", fuse_pkgversion());
         fuse_lowlevel_version();
+        free(opts.mountpoint);
+        fuse_opt_free_args(&args);
         return 0;
     }
     if (opts.mountpoint == NULL) {
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
+        free(opts.mountpoint);
+        fuse_opt_free_args(&args);
         return 1;
     }
 
