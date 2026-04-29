@@ -82,6 +82,12 @@ struct dirinfo {
 KHASH_MAP_INIT_STR(dirhash, struct dirinfo*)
 khash_t(dirhash) *dirh;
 
+struct inoarr {
+    ino_t *inos;
+    int size;
+    int exp;
+};
+
 struct openfileinfo {
     ino_t ino;
     int fd;
@@ -96,21 +102,19 @@ struct openfileinfo {
     struct timespec mtime;
     struct timespec ctime;
     struct timespec btime;
-    ino_t *dirinos;
-    int dirinosize;
-    int dirinoexp;
+    struct inoarr *dirinos;
     int nref;
 };
 
-int find_dirino_pos(struct openfileinfo *f, ino_t ino) {
+int find_ino_pos(struct inoarr *inos, ino_t ino) {
     int l = 0;
-    int r = f->dirinosize-1;
+    int r = inos->size-1;
     int pos = 0;
     while (l <= r) {
         pos = l + (r-l)/2;
-        if (f->dirinos[pos] < ino) {
+        if (inos->inos[pos] < ino) {
             l = pos + 1;
-        } else if (f->dirinos[pos] > ino) {
+        } else if (inos->inos[pos] > ino) {
             r = pos - 1;
         } else {
             break;
@@ -119,59 +123,59 @@ int find_dirino_pos(struct openfileinfo *f, ino_t ino) {
     return pos;
 }
 
-int insert_dirino(struct openfileinfo *f, ino_t ino) {
-    if (f->dirinosize == 0) {
-        f->dirinos[0] = ino;
-        f->dirinosize++;
+ino_t insert_ino(struct inoarr *inos, ino_t ino) {
+    if (inos->size == 0) {
+        inos->inos[0] = ino;
+        inos->size++;
         return ino;
     }
-    int pos = find_dirino_pos(f, ino);
-    if (f->dirinos[pos] != ino) {
-        f->dirinosize++;
-        if (f->dirinosize > f->dirinoexp) {
-            f->dirinoexp *= 2;
-            ino_t *dirinos = realloc(f->dirinos, sizeof(ino_t)*f->dirinoexp);
-            if (dirinos) {
-                memset(dirinos + f->dirinosize-1, 0x0, sizeof(ino_t)*(f->dirinoexp - f->dirinosize));
-                f->dirinos = dirinos;
+    int pos = find_ino_pos(inos, ino);
+    if (inos->inos[pos] != ino) {
+        inos->size++;
+        if (inos->size > inos->exp) {
+            inos->exp *= 2;
+            ino_t *newinos = realloc(inos->inos, sizeof(ino_t)*inos->exp);
+            if (newinos) {
+                memset(newinos + inos->size-1, 0x0, sizeof(ino_t)*(inos->exp - inos->size));
+                inos->inos = newinos;
             } else {
-                f->dirinoexp /= 2;
-                f->dirinosize--;
+                inos->exp /= 2;
+                inos->size--;
                 return 0;
             }
         }
-        if (f->dirinos[pos] > ino) {
-            memcpy(&f->dirinos[pos+1], &f->dirinos[pos], sizeof(ino_t)*(f->dirinosize - pos-1));
-            f->dirinos[pos] = ino;
+        if (inos->inos[pos] > ino) {
+            memcpy(&inos->inos[pos+1], &inos->inos[pos], sizeof(ino_t)*(inos->size - pos-1));
+            inos->inos[pos] = ino;
         } else {
-            if (pos+2 < f->dirinoexp) {
-                memcpy(&f->dirinos[pos+2], &f->dirinos[pos+1], sizeof(ino_t)*(f->dirinosize - pos-1));
+            if (pos+2 < inos->exp) {
+                memcpy(&inos->inos[pos+2], &inos->inos[pos+1], sizeof(ino_t)*(inos->size - pos-1));
             }
-            f->dirinos[pos+1] = ino;
+            inos->inos[pos+1] = ino;
         }
     }
     return ino;
 }
 
-int remove_dirino(struct openfileinfo *f, ino_t ino) {
-    if (f->dirinosize < 1) {
+ino_t remove_ino(struct inoarr *inos, ino_t ino) {
+    if (inos->size < 1) {
         return 0;
     }
-    int pos = find_dirino_pos(f, ino);
-    if (f->dirinos[pos] == ino) {
-        f->dirinosize--;
-        if (f->dirinosize < f->dirinoexp/2 && f->dirinoexp > 2) {
-            f->dirinoexp /= 2;
-            ino_t *dirinos = realloc(f->dirinos, sizeof(ino_t)*f->dirinoexp);
-            if (dirinos) {
-                f->dirinos = dirinos;
+    int pos = find_ino_pos(inos, ino);
+    if (inos->inos[pos] == ino) {
+        inos->size--;
+        if (inos->size < inos->exp/2 && inos->exp > 2) {
+            inos->exp /= 2;
+            ino_t *newinos = realloc(inos->inos, sizeof(ino_t)*inos->exp);
+            if (newinos) {
+                inos->inos = newinos;
             } else {
-                f->dirinosize++;
-                f->dirinoexp *= 2;
+                inos->size++;
+                inos->exp *= 2;
                 return 0;
             }
         }
-        memcpy(&f->dirinos[pos], &f->dirinos[pos+1], sizeof(ino_t)*(f->dirinosize-pos));
+        memcpy(&inos->inos[pos], &inos->inos[pos+1], sizeof(ino_t)*(inos->size-pos));
         return ino;
     } else {
         return 0;
@@ -186,14 +190,12 @@ struct opendirentry {
     char *name;
 };
 
-#define ino_cmp(a, b) (a < b ? -1 : (a > b ? 1 : 0))
-KBTREE_INIT(kbt_fileinos, ino_t, ino_cmp);
 #define filename_cmp(a, b) (strcmp((a).name, (b).name))
 KBTREE_INIT(kbt_fnames, struct opendirentry, filename_cmp)
 
 struct opendirinfo {
     int index;
-    kbtree_t(kbt_fileinos) *fileinos;
+    struct inoarr *fileinos;
     kbtree_t(kbt_fnames) *fnames;
 };
 
@@ -318,21 +320,20 @@ int add_filetodir(const char *name, ino_t ino) {
         k = add_opendir(dir->ino);
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
-		if (kb_size(opendir->fileinos) == MAX_DIRSIZE) {
+		if (opendir->fileinos->size >= MAX_DIRSIZE) {
             return ENOSPC;
         }
 
         //link directory and file both ways
-        ino_t *i = kb_getp(kbt_fileinos, opendir->fileinos, &ino);
-        if (!i) {
-            kb_putp(kbt_fileinos, opendir->fileinos, &ino);
+        ino_t i = insert_ino(opendir->fileinos, ino);
+        if (i) {
 
             k = kh_get(openfilehash, fcache, ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
                 f->nref++;
 
-                insert_dirino(f, dir->ino);
+                insert_ino(f->dirinos, dir->ino);
                 f->nlink++;
                 clock_gettime(CLOCK_REALTIME, &f->ctime);
                 k = kh_get(openfilehash, fcache, dir->ino);
@@ -369,13 +370,14 @@ void remove_filefromdir(const char *name, ino_t ino) {
         k = add_opendir(dir->ino);
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
-        kb_delp(kbt_fileinos, opendir->fileinos, &ino);
-        k = add_openfile(ino);
+        remove_ino(opendir->fileinos, ino);
+
+        k = kh_get(openfilehash, fcache, ino);
         if (k != kh_end(fcache)) {
             struct openfileinfo *f = kh_value(fcache, k);
             f->nref--;
 
-            remove_dirino(f, dir->ino);
+            remove_ino(f->dirinos, dir->ino);
             f->nlink--;
             clock_gettime(CLOCK_REALTIME, &f->ctime);
             k = add_openfile(dir->ino);
@@ -397,20 +399,17 @@ void remove_filefromdir(const char *name, ino_t ino) {
 }
 
 void remove_directory(const char *name) {
-    khint_t k;
-    kbitr_t itr;
+    khint_t k, ko;
 
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_val(dirh, k);
 
-        k = add_opendir(dir->ino);
-        struct opendirinfo *opendir = kh_val(opendirh, k);
+        ko = add_opendir(dir->ino);
+        struct opendirinfo *opendir = kh_val(opendirh, ko);
 
-        kb_itr_first(kbt_fileinos, opendir->fileinos, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, opendir->fileinos, &itr)) {
-            ino_t ino = kb_itr_key(ino_t, &itr);
-            remove_filefromdir(name, ino);
+        for (int i = 0; i < opendir->fileinos->size; i++) {
+            remove_filefromdir(name, opendir->fileinos->inos[0]);
         }
 
         remove_opendir(dir->ino);
@@ -522,10 +521,11 @@ static int add_sysdirs(const char *name, mode_t mode) {
             } else {
                 f->nlink = 1;
             }
-            f->dirinos = malloc(sizeof(ino_t)*2);
-            memset(f->dirinos, 0x0, sizeof(ino_t)*2);
-            f->dirinosize = 0;
-            f->dirinoexp = 2;
+            f->dirinos = malloc(sizeof(struct inoarr));
+            f->dirinos->inos = malloc(sizeof(ino_t)*2);
+            memset(f->dirinos->inos, 0x0, sizeof(ino_t)*2);
+            f->dirinos->size = 0;
+            f->dirinos->exp = 2;
             clock_gettime(CLOCK_REALTIME, &f->atime);
             clock_gettime(CLOCK_REALTIME, &f->mtime);
             clock_gettime(CLOCK_REALTIME, &f->ctime);
@@ -589,11 +589,12 @@ ino_t add_file(off_t size, const char *name, mode_t mode) {
             } else {
                 f->nlink = 0;
             }
-            f->dirinos = malloc(sizeof(ino_t)*2);
-            memset(f->dirinos, 0x0, sizeof(ino_t)*2);
-            f->dirinosize = 0;
-            f->dirinoexp = 2;
             f->nref = 0;
+            f->dirinos = malloc(sizeof(struct inoarr));
+            f->dirinos->inos = malloc(sizeof(ino_t)*2);
+            memset(f->dirinos->inos, 0x0, sizeof(ino_t)*2);
+            f->dirinos->size = 0;
+            f->dirinos->exp = 2;
 
             clock_gettime(CLOCK_REALTIME, &f->atime);
             clock_gettime(CLOCK_REALTIME, &f->mtime);
@@ -611,18 +612,16 @@ ino_t add_file(off_t size, const char *name, mode_t mode) {
                         remove_directory(name);
                     }
                     free(f->name);
-                    if (f->dirinos) {
-                        free(f->dirinos);
-                    }
+                    free(f->dirinos->inos);
+                    free(f->dirinos);
                     free(f);
                     return 0;
                 }
             } else {
                 if (add_filetodir(FILES_FN, freemap->ino)) { //_FILES contains all regular files
                     free(f->name);
-                    if (f->dirinos) {
-                        free(f->dirinos);
-                    }
+                    free(f->dirinos->inos);
+                    free(f->dirinos);
                     free(f);
                     return 0;
                 }
@@ -663,7 +662,15 @@ void delete_file_on_disk(ino_t ino, mode_t mode) {
             setxattr(filepath, "user.smtfs_m.ino", &ino, sizeof(ino), 0);
         }
 
-        remove(filepath); //remove from storage
+        //remove from storage
+        if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+            char *contents = get_file_path(filepath, "/contents.txt");
+            if (contents) {
+                remove(contents);
+                free(contents);
+            }
+        }
+        remove(filepath);
 
         free(filepath);
     }
@@ -675,8 +682,8 @@ void remove_file(ino_t ino) {
     k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
-        while (f->dirinosize) {
-            k1 = add_openfile(f->dirinos[0]);
+        while (f->dirinos->size) {
+            k1 = add_openfile(f->dirinos->inos[0]);
             if (k1 != kh_end(fcache)) {
                 struct openfileinfo *f1 = kh_value(fcache, k1);
                 remove_filefromdir(f1->name, ino);
@@ -693,9 +700,8 @@ void remove_file(ino_t ino) {
 
         if ((mode & S_IFMT) != S_IFDIR) {
             free(f->name);
-            if (f->dirinos) {
-                free(f->dirinos);
-            }
+            free(f->dirinos->inos);
+            free(f->dirinos);
             free(f);
             kh_del(openfilehash, fcache, k);
         }
@@ -717,7 +723,6 @@ void remove_file(ino_t ino) {
 }
 
 void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
-    kbitr_t itr;
     char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
@@ -725,12 +730,10 @@ void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
-            kb_itr_first(kbt_fileinos, opendir->fileinos, &itr);
-            for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, opendir->fileinos, &itr)) {
-                ino_t ino = kb_itr_key(ino_t, &itr);
-                int length = snprintf(NULL, 0, "%ld\n", ino);
+            for (int i = 0; i < opendir->fileinos->size; i++) {
+                int length = snprintf(NULL, 0, "%ld\n", opendir->fileinos->inos[i]);
                 char *strino = malloc(length+1);
-                sprintf(strino, "%ld\n", ino);
+                sprintf(strino, "%ld\n", opendir->fileinos->inos[i]);
                 write(newfd, strino, length);
                 free(strino);
             }
@@ -806,10 +809,11 @@ khint_t add_openfile(ino_t ino) {
         f->btime.tv_sec = stxbuf.stx_btime.tv_sec;
         f->btime.tv_nsec = stxbuf.stx_btime.tv_nsec;
 
-        f->dirinos = malloc(sizeof(ino_t)*2);
-        memset(f->dirinos, 0x0, sizeof(ino_t)*2);
-        f->dirinosize = 0;
-        f->dirinoexp = 2;
+        f->dirinos = malloc(sizeof(struct inoarr));
+        f->dirinos->inos = malloc(sizeof(ino_t)*2);
+        memset(f->dirinos->inos, 0x0, sizeof(ino_t)*2);
+        f->dirinos->size = 0;
+        f->dirinos->exp = 2;
 
         int size = listxattr(filepath, 0, 0);
         if (size <= 0) {
@@ -832,7 +836,7 @@ khint_t add_openfile(ino_t ino) {
                         khint_t k = kh_get(dirhash, dirh, p);
                         if (k != kh_end(dirh)) {
                             struct dirinfo *dir = kh_val(dirh, k);
-                            insert_dirino(f, dir->ino);
+                            insert_ino(f->dirinos, dir->ino);
                         }
                     }
                     s = strchr(s, '\0');
@@ -873,9 +877,8 @@ void remove_openfile(ino_t ino) {
                 free(filepath);
             }
             free(f->name);
-            if (f->dirinos) {
-                free(f->dirinos);
-            }
+            free(f->dirinos->inos);
+            free(f->dirinos);
             free(f);
             kh_del(openfilehash, fcache, k);
         }
@@ -893,10 +896,8 @@ void remove_opendir(ino_t ino) {
 
         write_dir_contents(ino, opendir);
 
-        kb_itr_first(kbt_fileinos, opendir->fileinos, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, opendir->fileinos, &itr)) {
-            ino_t ino = kb_itr_key(ino_t, &itr);
-            remove_openfile(ino);
+        for (int i = 0; i < opendir->fileinos->size; i++) {
+            remove_openfile(opendir->fileinos->inos[i]);
         }
         remove_openfile(ino);
 
@@ -905,9 +906,9 @@ void remove_opendir(ino_t ino) {
             struct opendirentry *e = &kb_itr_key(struct opendirentry, &itr);
             free(e->name);
         }
-        kb_destroy(kbt_fileinos, opendir->fileinos);
         kb_destroy(kbt_fnames, opendir->fnames);
-
+        free(opendir->fileinos->inos);
+        free(opendir->fileinos);
         free(opendir);
         kh_del(opendirhash, opendirh, ino);
     }
@@ -940,7 +941,11 @@ khint_t add_opendir(ino_t ino) {
                     dir->index = lvisit.currindex++;
                     lvisit.visits[dir->index].visit = lvisit.currvisit++;
                     lvisit.visits[dir->index].ino = ino;
-                    dir->fileinos = kb_init(kbt_fileinos, KB_DEFAULT_SIZE);
+                    dir->fileinos = malloc(sizeof(struct inoarr));
+                    dir->fileinos->inos = malloc(sizeof(ino_t)*2);
+                    memset(dir->fileinos->inos, 0x0, sizeof(ino_t)*2);
+                    dir->fileinos->size = 0;
+                    dir->fileinos->exp = 2;
                     dir->fnames = kb_init(kbt_fnames, KB_DEFAULT_SIZE);
                     ++f->nref;
 
@@ -955,10 +960,7 @@ khint_t add_opendir(ino_t ino) {
                         if (fptr) {
                             ino_t fino;
                             while (fscanf(fptr, "%lu\n", &fino) != EOF) {
-                                ino_t *t = kb_getp(kbt_fileinos, dir->fileinos, &fino);
-                                if (!t) {
-                                    kb_putp(kbt_fileinos, dir->fileinos, &fino);
-                                }
+                                insert_ino(dir->fileinos, fino);
                             }
                             fclose(fptr);
                         }
@@ -966,15 +968,11 @@ khint_t add_opendir(ino_t ino) {
                         fatal_error("add_opendir: Couldn't allocate memory\n");
                     }
                     if (ino != FILES && ino != TAGS) { //!loading files for these two would be like loading in the entire FS
-                        kbitr_t itr;
                         khint_t k;
-                        ino_t fino;
-                        kb_itr_first(kbt_fileinos, dir->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, dir->fileinos, &itr)) {
-                            fino = kb_itr_key(ino_t, &itr);
-                            k = kh_get(openfilehash, fcache, fino);
+                        for (int i = 0; i < dir->fileinos->size; i++) {
+                            k = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
                             if (k == kh_end(fcache)) {
-                                add_openfile(fino);
+                                add_openfile(dir->fileinos->inos[i]);
                             } else {
                                 struct openfileinfo *f = kh_value(fcache, k);
                                 f->nref++;
@@ -1455,7 +1453,7 @@ void refresh_imports() {
             }
             fclose(fptr);
         } else {
-            printf("refresh_imports: imports.txt not found\n");
+            fatal_error("refresh_imports: imports.txt not found\n");
         }
     } else {
         fatal_error("refresh_imports: Couldn't allocate memory");
@@ -1635,9 +1633,8 @@ static void smt_destroy(void *userdata) {
         if (kh_exist(fcache, k)) {
             struct openfileinfo* f = kh_val(fcache, k);
             free(f->name);
-            if (f->dirinos) {
-                free(f->dirinos);
-            }
+            free(f->dirinos->inos);
+            free(f->dirinos);
             free(f);
         }
     kh_destroy(openfilehash, fcache);
@@ -1853,11 +1850,8 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
         kb_destroy(kbt_fnames, opendir->fnames);
         opendir->fnames = kb_init(kbt_fnames, KB_DEFAULT_SIZE);
 
-        kb_itr_first(kbt_fileinos, opendir->fileinos, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, opendir->fileinos, &itr)) {
-            ino_t ino = kb_itr_key(ino_t, &itr);
-
-            k = kh_get(openfilehash, fcache, ino);
+        for (int i = 0; i < opendir->fileinos->size; i++) {
+            k = kh_get(openfilehash, fcache, opendir->fileinos->inos[i]);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
                 k1 = kh_get(filenamehash, fnh, f->name);
@@ -1871,12 +1865,10 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
         }
 
         int p = 0;
-        kb_itr_first(kbt_fileinos, opendir->fileinos, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, opendir->fileinos, &itr)) {
-            ino_t ino = kb_itr_key(ino_t, &itr);
-
+        for (int i = 0; i < opendir->fileinos->size; i++) {
             struct opendirentry *fin;
-            k = kh_get(openfilehash, fcache, ino);
+
+            k = kh_get(openfilehash, fcache, opendir->fileinos->inos[i]);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
 
@@ -1968,18 +1960,15 @@ ino_t dirset(const char* name, const char *pos) {
     free(dir1);
     free(dir2);
 
-    kbitr_t itr;
     if (d1 && d2) {
         switch (name[(pos-name)+1]) {
             case '&':{
                         ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
-                        kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
-                            ino_t i1 = kb_itr_key(ino_t, &itr);
-                            ino_t *i2 = kb_getp(kbt_fileinos, d2->fileinos, &i1);
-                            if (i2) {
-                                add_filetodir(name, i1);
+                        for (int i = 0; i < d1->fileinos->size; i++) {
+                            int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
+                            if (d2->fileinos->inos[pos] == d1->fileinos->inos[i]) {
+                                add_filetodir(name, d1->fileinos->inos[i]);
                             }
                         }
 
@@ -1988,15 +1977,11 @@ ino_t dirset(const char* name, const char *pos) {
             case '|':{
                         ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
-                        kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
-                            ino_t i1 = kb_itr_key(ino_t, &itr);
-                            add_filetodir(name, i1);
+                        for (int i = 0; i < d1->fileinos->size; i++) {
+                            add_filetodir(name, d1->fileinos->inos[i]);
                         }
-                        kb_itr_first(kbt_fileinos, d2->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d2->fileinos, &itr)) {
-                            ino_t i2 = kb_itr_key(ino_t, &itr);
-                            add_filetodir(name, i2);
+                        for (int i = 0; i < d2->fileinos->size; i++) {
+                            add_filetodir(name, d2->fileinos->inos[i]);
                         }
 
                         return ino;
@@ -2004,20 +1989,16 @@ ino_t dirset(const char* name, const char *pos) {
             case '^':{
                         ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
-                        kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
-                            ino_t i1 = kb_itr_key(ino_t, &itr);
-                            ino_t *i2 = kb_getp(kbt_fileinos, d2->fileinos, &i1);
-                            if (!i2) {
-                                add_filetodir(name, i1);
+                        for (int i = 0; i < d1->fileinos->size; i++) {
+                            int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
+                            if (d2->fileinos->inos[pos] != d1->fileinos->inos[i]) {
+                                add_filetodir(name, d1->fileinos->inos[i]);
                             }
                         }
-                        kb_itr_first(kbt_fileinos, d2->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d2->fileinos, &itr)) {
-                            ino_t i2 = kb_itr_key(ino_t, &itr);
-                            ino_t *i1 = kb_getp(kbt_fileinos, d1->fileinos, &i2);
-                            if (!i1) {
-                                add_filetodir(name, i2);
+                        for (int i = 0; i < d2->fileinos->size; i++) {
+                            int pos = find_ino_pos(d1->fileinos, d2->fileinos->inos[i]);
+                            if (d1->fileinos->inos[pos] != d2->fileinos->inos[i]) {
+                                add_filetodir(name, d2->fileinos->inos[i]);
                             }
                         }
 
@@ -2026,12 +2007,10 @@ ino_t dirset(const char* name, const char *pos) {
             case '~':{
                         ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
 
-                        kb_itr_first(kbt_fileinos, d1->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, d1->fileinos, &itr)) {
-                            ino_t i1 = kb_itr_key(ino_t, &itr);
-                            ino_t *i2 = kb_getp(kbt_fileinos, d2->fileinos, &i1);
-                            if (!i2) {
-                                add_filetodir(name, i1);
+                        for (int i = 0; i < d1->fileinos->size; i++) {
+                            int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
+                            if (d2->fileinos->inos[pos] != d1->fileinos->inos[i]) {
+                                add_filetodir(name, d1->fileinos->inos[i]);
                             }
                         }
 
@@ -2334,6 +2313,9 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
         fin->name[strlen(name)] = '\0';
 
         struct opendirentry *entry = kb_getp(kbt_fnames, opendir->fnames, fin);
+        free(fin->name);
+        free(fin);
+
         if (entry) {
             k = kh_get(openfilehash, fcache, entry->ino);
             if (k != kh_end(fcache)) {
@@ -2362,12 +2344,9 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     if ((f->mode & S_IFMT) == S_IFDIR) {
                         add_directory(olddir->ino, f->name);
 
-                        kbitr_t itr;
-                        kb_itr_first(kbt_fileinos, opendir->fileinos, &itr);
-                        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fileinos, opendir->fileinos, &itr)) {
-                            ino_t fino = kb_itr_key(ino_t, &itr);
-                            set_file_xattr(fino, f->name, ADD);
-                            set_file_xattr(fino, name, RMV);
+                        for (int i = 0; i < opendir->fileinos->size; i++) {
+                            set_file_xattr(opendir->fileinos->inos[i], f->name, ADD);
+                            set_file_xattr(opendir->fileinos->inos[i], name, RMV);
                         }
 
                         k = kh_get(dirhash, dirh, name);
@@ -2376,10 +2355,10 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                         free(olddir);
                     }
 
-                    for (int i = 0; i < f->dirinosize; i++) {
-                        k = kh_get(opendirhash, opendirh, f->dirinos[i]);
+                    for (int i = 0; i < f->dirinos->size; i++) {
+                        k = kh_get(opendirhash, opendirh, f->dirinos->inos[i]);
                         if (k != kh_end(opendirh)) {
-                            refreshdir(NULL, NULL, f->dirinos[i], 0);
+                            refreshdir(NULL, NULL, f->dirinos->inos[i], 0);
                         }
                     }
 
@@ -2403,8 +2382,6 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                 res = 0;
             }
         }
-        free(fin->name);
-        free(fin);
     }
 
 	fuse_reply_err(req, res);
@@ -2417,7 +2394,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     khint_t k = kh_get(openfilehash, fcache, parent);
     if (k != kh_end(fcache)) {
         struct openfileinfo *fp = kh_value(fcache, k);
-        if (freemap->ino < MAX_FILES && fp->dirinosize < MAX_DIRSIZE) {
+        if (freemap->ino < MAX_FILES && fp->dirinos->size < MAX_DIRSIZE) {
             if (parent > TAGS && ((mode & S_IFMT) != S_IFDIR) && ((fp->mode & S_IFMT) == S_IFDIR)) {
                 ino_t ino = add_file(0x0, name, S_IFREG | mode);
 
@@ -2578,25 +2555,24 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
     if (k != kh_end(dirh)) { //check if dir
         struct dirinfo *dir = kh_value(dirh, k);
 
-        khint_t k = kh_get(openfilehash, fcache, dir->ino);
-        if (k != kh_end(fcache)) {
-            struct openfileinfo *f = kh_value(fcache, k);
-            if (dir->ino > SYSDIR) {
-                khint_t k = kh_get(openfilehash, fcache, parent);
+        if (dir->ino > SYSDIR) {
+            if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
+                remove_file(dir->ino);
+            } else { //else unlink only from current directory
+                k = kh_get(openfilehash, fcache, dir->ino);
                 if (k != kh_end(fcache)) {
-                    struct openfileinfo *fp = kh_value(fcache, k);
-                    remove_filefromdir(fp->name, dir->ino);
-                }
-
-                if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
-                    remove_file(dir->ino);
-                } else {
+                    struct openfileinfo *f = kh_value(fcache, k);
+                    k = kh_get(openfilehash, fcache, parent);
+                    if (k != kh_end(fcache)) {
+                        struct openfileinfo *fp = kh_value(fcache, k);
+                        remove_filefromdir(fp->name, dir->ino);
+                    }
                     clock_gettime(CLOCK_REALTIME, &f->ctime);
                 }
-                res = 0;
-            } else {
-				res = EPERM;
-			}
+            }
+            res = 0;
+        } else {
+            res = EPERM;
         }
     }
     fuse_reply_err(req, res);
@@ -2671,13 +2647,13 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
         }
         char *p = value;
 
-        for (int i = 0; i < f->dirinosize; i++) {
-            k = kh_get(openfilehash, fcache, f->dirinos[i]);
+        for (int i = 0; i < f->dirinos->size; i++) {
+            k = kh_get(openfilehash, fcache, f->dirinos->inos[i]);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *fd = kh_value(fcache, k);
                 p = memccpy(p, fd->name, '\0', strlen(fd->name)+1);
             } else {
-                char *dirname = get_xattr_from_file(f->dirinos[i], "user.smtfs_m.name");
+                char *dirname = get_xattr_from_file(f->dirinos->inos[i], "user.smtfs_m.name");
                 p = memccpy(p, dirname, '\0', strlen(dirname)+1);
                 free(dirname);
             }
@@ -2685,13 +2661,13 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
 
 		fuse_reply_buf(req, value, size);
     } else {
-        for (int i = 0; i < f->dirinosize; i++) {
-            k = kh_get(openfilehash, fcache, f->dirinos[i]);
+        for (int i = 0; i < f->dirinos->size; i++) {
+            k = kh_get(openfilehash, fcache, f->dirinos->inos[i]);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *fd = kh_value(fcache, k);
                 ret += strlen(fd->name)+1;
             } else {
-                char *dirname = get_xattr_from_file(f->dirinos[i], "user.smtfs_m.name");
+                char *dirname = get_xattr_from_file(f->dirinos->inos[i], "user.smtfs_m.name");
                 ret += strlen(dirname)+1;
                 free(dirname);
             }
@@ -2736,8 +2712,8 @@ int recursive_dir(ino_t dirino, ino_t ino) {
     }
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
-        for (int i = 0; i < f->dirinosize; i++) {
-            ino_t inod = f->dirinos[i];
+        for (int i = 0; i < f->dirinos->size; i++) {
+            ino_t inod = f->dirinos->inos[i];
             saverr = recursive_dir(inod, ino);
             if (saverr) {
                 return saverr;
@@ -2781,8 +2757,8 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
                 return;
             }
 
-            int pos = find_dirino_pos(f, dir->ino);
-            if (f->dirinos[pos] == dir->ino) { //check if dir being added is already present
+            int pos = find_ino_pos(f->dirinos, dir->ino);
+            if (f->dirinos->inos[pos] == dir->ino) { //check if dir being added is already present
                 fuse_reply_err(req, EEXIST);
                 return;
             }
@@ -2828,8 +2804,8 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
         if (k != kh_end(fcache)) {
             struct openfileinfo *f = kh_value(fcache, k);
 
-            int pos = find_dirino_pos(f, dir->ino);
-            if (f->dirinos[pos] == dir->ino) { //check if present
+            int pos = find_ino_pos(f->dirinos, dir->ino);
+            if (f->dirinos->inos[pos] == dir->ino) { //check if present
                 remove_filefromdir(name, ino);
                 saverr = 0;
             }
@@ -2917,7 +2893,7 @@ int main(int argc, char **argv)
     if (opts.show_help) {
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
         printf("smtfs options:\n"
-               "    -import=source_dir[&dir2]    import existing directories\n"
+               "    -import='source_dir[&dir2]'    import existing directories\n"
                "    -p   --passthrough           pass operations to the import directory\n"
                "fuse options:\n");
         fuse_cmdline_help();
