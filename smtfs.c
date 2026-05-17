@@ -4,7 +4,6 @@
 #include <fuse3/fuse_lowlevel.h>
 #include "klib/khash.h"
 #include "klib/ksort.h"
-#include "klib/kbtree.h"
 #include "cp.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -149,7 +148,7 @@ ino_t insert_ino(struct inoarr *inos, ino_t ino) {
             inos->inos[pos] = ino;
         } else {
             if (pos+2 < inos->exp) {
-                memcpy(&inos->inos[pos+2], &inos->inos[pos+1], sizeof(ino_t)*(inos->size - pos-1));
+                memcpy(&inos->inos[pos+2], &inos->inos[pos+1], sizeof(ino_t)*(inos->size - pos-2));
             }
             inos->inos[pos+1] = ino;
         }
@@ -190,14 +189,103 @@ struct opendirentry {
     char *name;
 };
 
-#define filename_cmp(a, b) (strcmp((a).name, (b).name))
-KBTREE_INIT(kbt_fnames, struct opendirentry, filename_cmp)
+struct strarr {
+    struct opendirentry *entries;
+    int size;
+    int exp;
+};
 
 struct opendirinfo {
     int index;
     struct inoarr *fileinos;
-    kbtree_t(kbt_fnames) *fnames;
+    struct strarr *filenames;
 };
+
+int find_fname_pos(struct strarr *entries, const char *fname) {
+    int l = 0;
+    int r = entries->size-1;
+    int pos = 0;
+    int res;
+    while (l <= r) {
+        pos = l + (r-l)/2;
+        res = strcmp(entries->entries[pos].name, fname);
+        if (res < 0) {
+            l = pos + 1;
+        } else if (res > 0) {
+            r = pos - 1;
+        } else {
+            break;
+        }
+    }
+    return pos;
+}
+
+ino_t insert_fname(struct strarr *entries, char *fname, ino_t ino) {
+    printf("insert %s\n", fname);
+    if (entries->size == 0) {
+        entries->entries[0].name = fname;
+        entries->entries[0].ino = ino;
+        entries->size++;
+        return ino;
+    }
+    int pos = find_fname_pos(entries, fname);
+    int res = strcmp(entries->entries[pos].name, fname);
+    printf("%s res %d\n", entries->entries[pos].name, res);
+    if (res) {
+        entries->size++;
+        if (entries->size > entries->exp) {
+            entries->exp *= 2;
+            struct opendirentry *newentries = realloc(entries->entries, sizeof(struct opendirentry)*entries->exp);
+            if (newentries) {
+                memset(newentries + entries->size-1, 0x0, sizeof(struct opendirentry)*(entries->exp - entries->size));
+                entries->entries = newentries;
+            } else {
+                entries->exp /= 2;
+                entries->size--;
+                return 0;
+            }
+        }
+        if (res > 0) {
+            memcpy(&entries->entries[pos+1], &entries->entries[pos], sizeof(struct opendirentry)*(entries->size - pos-1));
+            entries->entries[pos].name = fname;
+            entries->entries[pos].ino = ino;
+        } else {
+            if (pos+2 < entries->exp) {
+                memcpy(&entries->entries[pos+2], &entries->entries[pos+1], sizeof(struct opendirentry)*(entries->size - pos-2));
+            }
+            entries->entries[pos+1].name = fname;
+            entries->entries[pos+1].ino = ino;
+        }
+    }
+    return ino;
+}
+
+ino_t remove_fname(struct strarr *entries, char *fname) {
+    if (entries->size < 1) {
+        return 0;
+    }
+    int pos = find_fname_pos(entries, fname);
+    if (!strcmp(entries->entries[pos].name, fname)) {
+        ino_t ino = entries->entries[pos].ino;
+        free(entries->entries[pos].name);
+        entries->size--;
+        if (entries->size < entries->exp/2 && entries->exp > 2) {
+            entries->exp /= 2;
+            struct opendirentry *newentries = realloc(entries->entries, sizeof(struct opendirentry)*entries->exp);
+            if (newentries) {
+                entries->entries = newentries;
+            } else {
+                entries->size++;
+                entries->exp *= 2;
+                return 0;
+            }
+        }
+        memcpy(&entries->entries[pos], &entries->entries[pos+1], sizeof(struct opendirentry)*(entries->size-pos));
+        return ino;
+    } else {
+        return 0;
+    }
+}
 
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
 khash_t(opendirhash) *opendirh;
@@ -887,7 +975,7 @@ void remove_openfile(ino_t ino) {
 
 void remove_opendir(ino_t ino) {
     khint_t k;
-    kbitr_t itr;
+    //kbitr_t itr;
 
     k = kh_get(opendirhash, opendirh, ino);
     if (k != kh_end(opendirh)) {
@@ -901,15 +989,15 @@ void remove_opendir(ino_t ino) {
         }
         remove_openfile(ino);
 
-        kb_itr_first(kbt_fnames, opendir->fnames, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fnames, opendir->fnames, &itr)) {
-            struct opendirentry *e = &kb_itr_key(struct opendirentry, &itr);
-            free(e->name);
-        }
-        kb_destroy(kbt_fnames, opendir->fnames);
         free(opendir->fileinos->inos);
         free(opendir->fileinos);
+        for (int i = 0; i < opendir->filenames->size; i++) {
+            free(opendir->filenames->entries[i].name);
+        }
+        free(opendir->filenames->entries);
+        free(opendir->filenames);
         free(opendir);
+
         kh_del(opendirhash, opendirh, ino);
     }
 }
@@ -941,12 +1029,19 @@ khint_t add_opendir(ino_t ino) {
                     dir->index = lvisit.currindex++;
                     lvisit.visits[dir->index].visit = lvisit.currvisit++;
                     lvisit.visits[dir->index].ino = ino;
+
                     dir->fileinos = malloc(sizeof(struct inoarr));
                     dir->fileinos->inos = malloc(sizeof(ino_t)*2);
                     memset(dir->fileinos->inos, 0x0, sizeof(ino_t)*2);
                     dir->fileinos->size = 0;
                     dir->fileinos->exp = 2;
-                    dir->fnames = kb_init(kbt_fnames, KB_DEFAULT_SIZE);
+
+                    dir->filenames = malloc(sizeof(struct strarr));
+                    dir->filenames->entries = malloc(sizeof(struct opendirentry)*2);
+                    memset(dir->filenames->entries, 0x0, sizeof(struct opendirentry)*2);
+                    dir->filenames->size = 0;
+                    dir->filenames->exp = 2;
+
                     ++f->nref;
 
                     //load directory contents
@@ -1841,14 +1936,15 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.visits[opendir->index].visit = lvisit.currvisit++;
-        kbitr_t itr;
-        kb_itr_first(kbt_fnames, opendir->fnames, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fnames, opendir->fnames, &itr)) {
-            struct opendirentry *p = &kb_itr_key(struct opendirentry, &itr);
-            free(p->name);
+
+        for (int i = 0; i < opendir->filenames->size; i++) {
+            free(opendir->filenames->entries[i].name);
         }
-        kb_destroy(kbt_fnames, opendir->fnames);
-        opendir->fnames = kb_init(kbt_fnames, KB_DEFAULT_SIZE);
+        free(opendir->filenames->entries);
+        opendir->filenames->entries = malloc(sizeof(struct opendirentry)*2);
+        memset(opendir->filenames->entries, 0x0, sizeof(struct opendirentry)*2);
+        opendir->filenames->size = 0;
+        opendir->filenames->exp = 2;
 
         for (int i = 0; i < opendir->fileinos->size; i++) {
             k = kh_get(openfilehash, fcache, opendir->fileinos->inos[i]);
@@ -1893,7 +1989,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                         }
                         strncpy(fin->name, name, strlen(name));
                         fin->name[strlen(name)] = '\0';
-                        kb_putp(kbt_fnames, opendir->fnames, fin);
+                        insert_fname(opendir->filenames, fin->name, fin->ino);
                         free(name);
                     } else {
                         printf("refreshdir: filename malloc fail -> %ld\n", f->ino);
@@ -1909,7 +2005,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                     }
                     strncpy(fin->name, f->name, strlen(f->name));
                     fin->name[strlen(f->name)] = '\0';
-                    kb_putp(kbt_fnames, opendir->fnames, fin);
+                    insert_fname(opendir->filenames, fin->name, fin->ino);
                 }
 
                 if (addbuff) {
@@ -2035,19 +2131,13 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
-        struct opendirentry *fin = calloc(1, sizeof(struct opendirentry));
-        fin->name = (char*)malloc(strlen(name)+1);
-        strncpy(fin->name, name, strlen(name));
-        fin->name[strlen(name)] = '\0';
-        struct opendirentry *entry = kb_getp(kbt_fnames, opendir->fnames, fin);
-        if (entry) {
-            k = kh_get(openfilehash, fcache, entry->ino);
+        int pos = find_fname_pos(opendir->filenames, name);
+        if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
+            k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 f = kh_value(fcache, k);
             }
         }
-        free(fin->name);
-        free(fin);
     } else if (!strncmp("..", name, strlen(".."))) {
         k = kh_get(openfilehash, fcache, ROOT);
         if (k != kh_end(fcache)) {
@@ -2221,12 +2311,10 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
     khint_t k = add_opendir(ino);
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
+
         lvisit.visits[opendir->index].visit = lvisit.currvisit++;
-        kbitr_t itr;
-        kb_itr_first(kbt_fnames, opendir->fnames, &itr);
-        for (; kb_itr_valid(&itr); kb_itr_next(kbt_fnames, opendir->fnames, &itr)) {
-            struct opendirentry *fin = &kb_itr_key(struct opendirentry, &itr);
-            dirbuf_add(req, &b, fin->name, fin->ino);
+        for (int i = 0; i < opendir->filenames->size; i++) {
+            dirbuf_add(req, &b, opendir->filenames->entries[i].name, opendir->filenames->entries[i].ino);
         }
     }
 
@@ -2307,17 +2395,10 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
-        struct opendirentry *fin = calloc(1, sizeof(struct opendirentry));
-        fin->name = (char*)malloc(strlen(name)+1);
-        strncpy(fin->name, name, strlen(name));
-        fin->name[strlen(name)] = '\0';
+        int pos = find_fname_pos(opendir->filenames, name);
 
-        struct opendirentry *entry = kb_getp(kbt_fnames, opendir->fnames, fin);
-        free(fin->name);
-        free(fin);
-
-        if (entry) {
-            k = kh_get(openfilehash, fcache, entry->ino);
+        if (!strcmp(opendir->filenames->entries[pos].name, name)) {
+            k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
                 struct dirinfo *olddir = NULL;
@@ -2516,14 +2597,10 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
-        struct opendirentry *fin = calloc(1, sizeof(struct opendirentry));
-        fin->name = (char*)malloc(strlen(name)+1);
-        strncpy(fin->name, name, strlen(name));
-        fin->name[strlen(name)] = '\0';
+        int pos = find_fname_pos(opendir->filenames, name);
 
-        struct opendirentry *entry = kb_getp(kbt_fnames, opendir->fnames, fin);
-        if (entry) {
-            khint_t k = kh_get(openfilehash, fcache, entry->ino);
+        if (!strcmp(opendir->filenames->entries[pos].name, name)) {
+            khint_t k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
                 khint_t k = kh_get(openfilehash, fcache, parent);
@@ -2540,8 +2617,6 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
                 res = 0;
             }
         }
-        free(fin->name);
-        free(fin);
     }
 
 	fuse_reply_err(req, res);
