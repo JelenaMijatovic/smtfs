@@ -175,7 +175,7 @@ ino_t remove_fname(struct strarr *entries, char *fname) {
 }
 
 //dirinfo
-struct dirinfo* add_directory(ino_t ino, const char* name) {
+struct dirinfo* add_directory(const char* name, ino_t ino) {
 
     struct dirinfo *dir = NULL;
     khint_t k;
@@ -351,7 +351,7 @@ int add_sysdirs(const char *name, mode_t mode) {
             khint_t k = kh_put(openfilehash, fcache, f->ino, &absent);
             kh_val(fcache, k) = f;
 
-            struct dirinfo *ret = add_directory(freemap->ino, name);
+            struct dirinfo *ret = add_directory(name, freemap->ino);
             if (!ret) {
                 free(f->name);
                 if (f->dirinos) {
@@ -377,7 +377,7 @@ int add_sysdirs(const char *name, mode_t mode) {
 }
 
 //openfileinfo
-ino_t add_file(off_t size, const char *name, mode_t mode) {
+ino_t add_file(const char *name, mode_t mode, off_t size) {
 
     if (freemap->ino < MAX_FILES) {
 
@@ -422,7 +422,7 @@ ino_t add_file(off_t size, const char *name, mode_t mode) {
             kh_val(fcache, k) = f;
 
             if ((mode & S_IFMT) == S_IFDIR) {
-                struct dirinfo *ret = add_directory(freemap->ino, name);
+                struct dirinfo *ret = add_directory(name, freemap->ino);
                 if (!ret || add_filetodir(TAGS_FN, freemap->ino)) { //_TAGS contains all directories except those in root
                     if (ret) {
                         remove_directory(name);
@@ -718,7 +718,7 @@ void remove_opendir(ino_t ino) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.currindex = opendir->index;
 
-        write_dir_contents(ino, opendir);
+        write_dir_contents(ino, opendir->fileinos);
 
         for (int i = 0; i < opendir->fileinos->size; i++) {
             remove_openfile(opendir->fileinos->inos[i]);
@@ -770,7 +770,7 @@ ino_t dirset(const char* name, const char *pos) {
     if (d1 && d2) {
         switch (name[(pos-name)+1]) {
             case '&':{
-                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
 
                         for (int i = 0; i < d1->fileinos->size; i++) {
                             int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
@@ -782,7 +782,7 @@ ino_t dirset(const char* name, const char *pos) {
                         return ino;
                     }
             case '|':{
-                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
 
                         for (int i = 0; i < d1->fileinos->size; i++) {
                             add_filetodir(name, d1->fileinos->inos[i]);
@@ -794,7 +794,7 @@ ino_t dirset(const char* name, const char *pos) {
                         return ino;
                     }
             case '^':{
-                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
 
                         for (int i = 0; i < d1->fileinos->size; i++) {
                             int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
@@ -812,7 +812,7 @@ ino_t dirset(const char* name, const char *pos) {
                         return ino;
                     }
             case '~':{
-                        ino_t ino = add_file(config.blksize, name, S_IFDIR | 0777);
+                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
 
                         for (int i = 0; i < d1->fileinos->size; i++) {
                             int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);

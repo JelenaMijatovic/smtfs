@@ -184,7 +184,7 @@ void read_importdir(char* path, DIR *imfd, ino_t parent, char* parentname) {
                             } else {
                                 ino = freemap->ino++;
                             }
-                            add_directory(ino, entry->d_name);
+                            add_directory(entry->d_name, ino);
                             open_file(ino, entry->d_name, 0777 | S_IFDIR);
 
                             append_dir_contents(TAGS, ino);
@@ -247,7 +247,7 @@ void import_dir(char* importroot) {
                     else {
                         ino = freemap->ino++;
                     }
-                    add_directory(ino, importname);
+                    add_directory(importname, ino);
                     open_file(ino, importname, 0777 | S_IFDIR);
 
                     append_dir_contents(TAGS, ino);
@@ -333,7 +333,7 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                                 } else {
                                     ino = freemap->ino++;
                                 }
-                                add_directory(ino, entry->d_name);
+                                add_directory(entry->d_name, ino);
                                 open_file(ino, entry->d_name, 0777 | S_IFDIR);
 
                                 append_dir_contents(TAGS, ino);
@@ -1153,7 +1153,7 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
             if (pos != NULL && (pos-name)+1 != strlen(name)) {
                 ino = dirset(name, pos);
             } else {
-                ino = add_file(config.blksize, name, S_IFDIR | mode);
+                ino = add_file(name, S_IFDIR | mode, config.blksize);
             }
 
             if (ino) {
@@ -1240,7 +1240,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     f->name[strlen(newname)] = '\0';
 
                     if ((f->mode & S_IFMT) == S_IFDIR) {
-                        add_directory(olddir->ino, f->name);
+                        add_directory(f->name, olddir->ino);
 
                         for (int i = 0; i < opendir->fileinos->size; i++) {
                             set_file_xattr(opendir->fileinos->inos[i], f->name, ADD);
@@ -1294,7 +1294,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
         struct openfileinfo *fp = kh_value(fcache, k);
         if (freemap->ino < MAX_FILES && fp->dirinos->size < MAX_DIRSIZE) {
             if (parent > TAGS && ((mode & S_IFMT) != S_IFDIR) && ((fp->mode & S_IFMT) == S_IFDIR)) {
-                ino_t ino = add_file(0x0, name, S_IFREG | mode);
+                ino_t ino = add_file(name, S_IFREG | mode, 0x0);
 
                 if (parent != FILES) {
                     add_filetodir(fp->name, ino);
@@ -1664,7 +1664,7 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
             saverr = add_filetodir(name, ino);
         }
     } else {
-        saverr = add_file(config.blksize, name, S_IFDIR | 0777);
+        saverr = add_file(name, S_IFDIR | 0777, config.blksize);
         saverr = add_filetodir(name, ino);
     }
 

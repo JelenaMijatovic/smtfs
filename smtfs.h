@@ -4,8 +4,8 @@
 #define _GNU_SOURCE
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(3, 18)
 
-#include "klib/khash.h"
-#include "klib/ksort.h"
+#include "khash.h"
+#include "ksort.h"
 #include <fuse3/fuse_lowlevel.h>
 #include <dirent.h>
 #include <errno.h>
@@ -156,7 +156,7 @@ int find_fname_pos(struct strarr *entries, char *fname);
 ino_t insert_fname(struct strarr *entries, char *fname, ino_t ino);
 ino_t remove_fname(struct strarr *entries, char *fname);
 
-struct dirinfo* add_directory(ino_t ino, const char* name);
+struct dirinfo* add_directory(const char* name, ino_t ino);
 void remove_directory(const char *name);
 
 int add_filetodir(const char *dirname, ino_t fileino);
@@ -164,7 +164,7 @@ void remove_filefromdir(const char *dirname, ino_t fileino);
 
 int add_sysdirs(const char *name, mode_t mode);
 
-ino_t add_file(off_t size, const char *name, mode_t mode);
+ino_t add_file(const char *name, mode_t mode, off_t size);
 void remove_file(ino_t ino);
 khint_t add_openfile(ino_t ino);
 void remove_openfile(ino_t ino);
@@ -187,8 +187,8 @@ void delete_file_on_disk(ino_t ino, mode_t mode);
 void create_symlink(ino_t ino, char* name, char* target);
 void rename_symlink(ino_t ino, char* newname);
 
-void write_dir_contents(ino_t ino, struct opendirinfo *opendir);
-void append_dir_contents(ino_t dirino, ino_t ino);
+void write_dir_contents(ino_t dirino, struct inoarr *fileinos);
+void append_dir_contents(ino_t dirino, ino_t fileino);
 
 //smtfs_fuse.c
 void fatal_error(const char *message);

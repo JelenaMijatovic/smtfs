@@ -184,30 +184,30 @@ void rename_symlink(ino_t ino, char* newname) {
 }
 
 //contents.txt
-void write_dir_contents(ino_t ino, struct opendirinfo *opendir) {
-    char *filepath = get_ino_path(config.storage, ino);
+void write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
+    char *filepath = get_ino_path(config.storage, dirino);
 
     if (filepath) {
         strcat(filepath, "/contents.txt");
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
-            for (int i = 0; i < opendir->fileinos->size; i++) {
-                int length = snprintf(NULL, 0, "%ld\n", opendir->fileinos->inos[i]);
+            for (int i = 0; i < fileinos->size; i++) {
+                int length = snprintf(NULL, 0, "%ld\n", fileinos->inos[i]);
                 char *strino = malloc(length+1);
-                sprintf(strino, "%ld\n", opendir->fileinos->inos[i]);
+                sprintf(strino, "%ld\n", fileinos->inos[i]);
                 write(newfd, strino, length);
                 free(strino);
             }
             close(newfd);
         } else {
-            printf("write_dir_contents: Couldn't write to contents.txt for dir %ld!\n", ino);
+            printf("write_dir_contents: Couldn't write to contents.txt for dir %ld!\n", dirino);
         }
         free(filepath);
     }
 }
 
-void append_dir_contents(ino_t dirino, ino_t ino) {
+void append_dir_contents(ino_t dirino, ino_t fileino) {
     char *filepath = get_ino_path(config.storage, dirino);
 
     if (filepath) {
@@ -215,9 +215,9 @@ void append_dir_contents(ino_t dirino, ino_t ino) {
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_CREAT, 0777);
         if (newfd) {
-            int length = snprintf(NULL, 0, "%ld\n", ino);
+            int length = snprintf(NULL, 0, "%ld\n", fileino);
             char *strino = malloc(length+1);
-            sprintf(strino, "%ld\n", ino);
+            sprintf(strino, "%ld\n", fileino);
             write(newfd, strino, length);
             free(strino);
             close(newfd);
