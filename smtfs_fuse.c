@@ -1214,7 +1214,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
         int pos = find_fname_pos(opendir->filenames, (char *)name);
 
-        if (!strcmp(opendir->filenames->entries[pos].name, name)) {
+        if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
             k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
@@ -1228,7 +1228,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                             return;
                         }
 
-                        k = kh_get(dirhash, dirh, name);
+                        k = kh_get(dirhash, dirh, f->name);
                         if (k != kh_end(dirh)) {
                             olddir = kh_value(dirh, k);
                         }
@@ -1247,7 +1247,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                             set_file_xattr(opendir->fileinos->inos[i], name, RMV);
                         }
 
-                        k = kh_get(dirhash, dirh, name);
+                        k = kh_get(dirhash, dirh, olddir->name);
                         kh_del(dirhash, dirh, k);
                         free(olddir->name);
                         free(olddir);
@@ -1416,7 +1416,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
         int pos = find_fname_pos(opendir->filenames, (char *)name);
 
-        if (!strcmp(opendir->filenames->entries[pos].name, name)) {
+        if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
             khint_t k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
@@ -1443,30 +1443,37 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
     int res = ENOENT;
     khint_t k;
 
-    k = kh_get(dirhash, dirh, name);
-    if (k != kh_end(dirh)) { //check if dir
-        struct dirinfo *dir = kh_value(dirh, k);
+    k = kh_get(opendirhash, opendirh, parent);
+    if (k != kh_end(opendirh)) {
+        struct opendirinfo *dir = kh_value(opendirh, k);
 
-        if (dir->ino > SYSDIR) {
-            if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
-                remove_file(dir->ino);
-            } else { //else unlink only from current directory
-                k = kh_get(openfilehash, fcache, dir->ino);
-                if (k != kh_end(fcache)) {
-                    struct openfileinfo *f = kh_value(fcache, k);
-                    k = kh_get(openfilehash, fcache, parent);
-                    if (k != kh_end(fcache)) {
-                        struct openfileinfo *fp = kh_value(fcache, k);
-                        remove_filefromdir(fp->name, dir->ino);
+        int pos = find_fname_pos(dir->filenames, (char *)name);
+        if (dir->filenames->entries[pos].name && !strcmp(dir->filenames->entries[pos].name, name)) {
+            k = kh_get(openfilehash, fcache, dir->filenames->entries[pos].ino);
+            if (k != kh_end(fcache)) {
+                struct openfileinfo *f = kh_value(fcache, k);
+
+                if (f->ino > SYSDIR) {
+                    if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
+                        remove_file(f->ino);
+                        res = 0;
+                    } else { //else unlink only from current directory
+                        k = kh_get(openfilehash, fcache, parent);
+                        if (k != kh_end(fcache)) {
+                            struct openfileinfo *fp = kh_value(fcache, k);
+
+                            remove_filefromdir(fp->name, f->ino);
+                            clock_gettime(CLOCK_REALTIME, &f->ctime);
+                            res = 0;
+                        }
                     }
-                    clock_gettime(CLOCK_REALTIME, &f->ctime);
+                }  else {
+                    res = EPERM;
                 }
             }
-            res = 0;
-        } else {
-            res = EPERM;
         }
     }
+
     fuse_reply_err(req, res);
 }
 
