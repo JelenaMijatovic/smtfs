@@ -23,6 +23,12 @@ Multiple source directories can be imported at once by appending them with '&' w
 Tagging is done through regular xattr operations (only the attribute name is relevant). It's also possible to tag files by "moving" them to the corresponding directory in a file manager, and undo tagging by deleting the file in the same directory.
 Entirely removing a file or directory from smtfs is done via removing it in the /_FILES and /_TAGS directory respectively. Removing a directory doesn't remove the files contained in it.
 
+A simple Bash script is included for multi-tagging:
+```
+ ./smttag.sh [-r] tags... -f files... -d directories...
+```
+Passing a directory with '-f' will tag the directory itself, while passing it with '-d' will tag all its contents. Passing '-r' removes tags.
+
 **Notes**
 
 smtfs uses [klib](https://github.com/attractivechaos/klib) (licensed under [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/eaa99ad6db5ac75314d54dc59e0a37546cb05654/NOTICE.md)) for data structure implementation.
