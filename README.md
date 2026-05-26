@@ -1,7 +1,7 @@
 # smtfs
 smtfs is a FUSE semantic file system that allows the user to organise their files using directories that function like tags. It is possible to both import existing directories into smtfs and create new files within smtfs. smtfs keeps track of the underlying file system in an unobtrusive manner through extended file attributes (xattr). 
 
-smtfs requires a Linux system that supports extended file attributes and has [FUSE](https://github.com/libfuse/libfuse) installed. Currently developing on Linux Mint.
+smtfs requires a Linux system that supports extended file attributes and has [FUSE](https://github.com/libfuse/libfuse) installed. Currently testing on Linux Mint.
 
 **Mounting**
 ```
