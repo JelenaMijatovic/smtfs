@@ -1219,6 +1219,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
                 struct dirinfo *olddir = NULL;
+                struct opendirinfo *openolddir = NULL;
 
                 if (strncmp(name, newname, max(strlen(name), strlen(newname)))) {
                     if ((f->mode & S_IFMT) == S_IFDIR) {
@@ -1232,6 +1233,11 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                         if (k != kh_end(dirh)) {
                             olddir = kh_value(dirh, k);
                         }
+
+                        k = add_opendir(f->ino);
+                        if (k != kh_end(opendirh)) {
+                            openolddir = kh_value(opendirh, k);
+                        }
                     }
 
                     free(f->name);
@@ -1242,9 +1248,9 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     if ((f->mode & S_IFMT) == S_IFDIR) {
                         add_directory(f->name, olddir->ino);
 
-                        for (int i = 0; i < opendir->fileinos->size; i++) {
-                            set_file_xattr(opendir->fileinos->inos[i], f->name, ADD);
-                            set_file_xattr(opendir->fileinos->inos[i], name, RMV);
+                        for (int i = 0; i < openolddir->fileinos->size; i++) {
+                            set_file_xattr(openolddir->fileinos->inos[i], f->name, ADD);
+                            set_file_xattr(openolddir->fileinos->inos[i], name, RMV);
                         }
 
                         k = kh_get(dirhash, dirh, olddir->name);
@@ -1623,14 +1629,11 @@ int recursive_dir(ino_t dirino, ino_t ino) {
 }
 
 static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const char *value, size_t size, int flags) {
+
     int saverr = EPERM;
 
     if (ino <= SYSDIR) { //don't allow tagging system directories
         fuse_reply_err(req, saverr);
-        return;
-    }
-    if (!strncmp(name, "user.smtfs", strlen("user.smtfs"))) { //!figure out what causes these calls
-        fuse_reply_err(req, EOPNOTSUPP);
         return;
     }
 
