@@ -227,3 +227,114 @@ void append_dir_contents(ino_t dirino, ino_t fileino) {
         free(filepath);
     }
 }
+
+void remove_xattr_from_dir(char* dirpath) {
+    //iterate
+    //get size
+    //list xattr
+    //remove xattr with prefix per each
+}
+
+void export_metadata_txt(char* storagepath) {
+    char *txtpath = get_file_path(devfile, "/datadump.txt");
+    if (txtpath) {
+        int newfd = open(txtpath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
+        if (newfd) {
+            char *filepath = NULL;
+            for (int i = 0; i <= 99; i++) {
+                filepath = malloc(PATH_MAX);
+                if (filepath) {
+                    filepath[0] = '\0';
+                    strcat(filepath, storagepath);
+                    int length = snprintf(NULL, 0, "/%d", i);
+                    char *strino = malloc(length+1);
+                    sprintf(strino, "/%d", i);
+                    strcat(filepath, strino);
+                    free(strino);
+
+                    DIR *imfd = opendir(filepath);
+                    if (imfd) {
+                        struct dirent *entry = NULL;
+                        struct stat stbuf;
+                        memset(&stbuf, 0, sizeof(stbuf));
+                        while ((entry = readdir(imfd)) != NULL) {
+                            if (strncmp(entry->d_name, ".", 1)) {
+                                ino_t ino;
+                                sscanf(entry->d_name, "%ld", &ino);
+                                int length = snprintf(NULL, 0, "%ld ", ino);
+                                strino = malloc(length+1);
+                                sprintf(strino, "%ld ", ino);
+
+                                write(newfd, strino, length);
+                                free(strino);
+
+                                char *entrpath = get_ino_path(storagepath, ino);
+                                if (entrpath) {
+                                    lstat(entrpath, &stbuf);
+                                    int size = getxattr(entrpath, "user.smtfs_m.name", 0, 0);
+                                    if (size > 0) {
+                                        char* name = malloc(size);
+                                        getxattr(entrpath, "user.smtfs_m.name", name, size);
+
+                                        write(newfd, name, strlen(name));
+                                        write(newfd, " ", 1);
+
+                                        free(name);
+                                    }
+
+                                    if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+                                        write(newfd, "DIR ", strlen("DIR "));
+                                    } else if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                                        write(newfd, "LNK ", strlen("LNK "));
+                                        char *buf = malloc(stbuf.st_size + 1);
+                                        readlink(entrpath, buf, stbuf.st_size);
+                                        buf[stbuf.st_size] = ' ';
+
+                                        write(newfd, buf, stbuf.st_size);
+
+                                        free(buf);
+                                    } else {
+                                        write(newfd, "REG ", strlen("LNK "));
+                                    }
+
+                                    size = listxattr(entrpath, 0, 0);
+                                    if (size > 0) {
+                                        char* list = malloc(size);
+                                        if (list) {
+                                            listxattr(entrpath, list, size);
+                                            int sum = 0;
+                                            char *s = list;
+                                            char *p;
+                                            while (sum < size) {
+                                                sum += strlen(s)+1;
+                                                p = strstr(s, "user.smtfs.");
+                                                if (p) {
+                                                    p = p + strlen("user.smtfs.");
+                                                    write(newfd, p, strlen(p));
+                                                    write(newfd, " ", 1);
+                                                }
+                                                s = strchr(s, '\0');
+                                                s++;
+                                            }
+                                        }
+                                        free(list);
+                                    }
+                                    memset(&stbuf, 0, sizeof(stbuf));
+                                    free(entrpath);
+                                }
+                                write(newfd, "\n", 1);
+                            }
+                        }
+                        closedir(imfd);
+                    }
+                    free(filepath);
+                }
+            }
+            printf("smtfs: Dump finished! Created file datadump.txt\n");
+        } else {
+            printf("export_metadata_txt: Couldn't write text dump!\n");
+        }
+        free(txtpath);
+        close(newfd);
+    }
+}

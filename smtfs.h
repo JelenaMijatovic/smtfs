@@ -42,6 +42,7 @@
 struct fuse_smt_userdata {
     int refresh;
     int passthrough;
+    int dump;
     int root_fd;
     dev_t dev;
     blksize_t blksize;
@@ -190,7 +191,11 @@ void rename_symlink(ino_t ino, char* newname);
 void write_dir_contents(ino_t dirino, struct inoarr *fileinos);
 void append_dir_contents(ino_t dirino, ino_t fileino);
 
+void export_metadata_txt(char* storagepath);
+
 //smtfs_fuse.c
+extern char *devfile;
+
 void fatal_error(const char *message);
 
 void smtfs_setup();

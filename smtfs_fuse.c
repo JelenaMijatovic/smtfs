@@ -8,7 +8,6 @@
 #include <libgen.h>
 
 static void smt_destroy(void *userdata);
-
 char *devfile = NULL;
 struct smtfs_config config;
 
@@ -1765,6 +1764,7 @@ static struct fuse_opt smtfs_opts[] = {
      SMTFS_OPT("--passthrough",     passthrough, 1),
      SMTFS_OPT("-li",               refresh, 1),
      SMTFS_OPT("--list-imports",    refresh, 1),
+     SMTFS_OPT("--dump",            dump, 1),
      FUSE_OPT_KEY("-V",             KEY_VERSION),
      FUSE_OPT_KEY("--version",      KEY_VERSION),
      FUSE_OPT_KEY("-h",             KEY_HELP),
@@ -1795,7 +1795,8 @@ int main(int argc, char **argv)
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
         printf("smtfs options:\n"
                "    -import='source_dir[&dir2]'    import existing directories\n"
-               "    -p   --passthrough           pass operations to the import directory\n"
+               "    -p   --passthrough             pass operations to the import directory\n"
+               "    --dump                         export smtfs file tagging metadata to a text file and exit\n"
                "fuse options:\n");
         fuse_cmdline_help();
         fuse_lowlevel_help();
@@ -1845,6 +1846,18 @@ int main(int argc, char **argv)
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
         return 1;
+    }
+
+    if (conf.dump) {
+        export_metadata_txt(storage);
+        closedir(rootdir);
+        free(opts.mountpoint);
+        free(dirpath);
+        free(storage);
+        free(backup);
+        free(devfile);
+        fuse_opt_free_args(&args);
+        return 0;
     }
 
     if (conf.import) { //check all import sources
