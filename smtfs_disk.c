@@ -229,10 +229,57 @@ void append_dir_contents(ino_t dirino, ino_t fileino) {
 }
 
 void remove_xattr_from_dir(char* dirpath) {
-    //iterate
-    //get size
-    //list xattr
-    //remove xattr with prefix per each
+
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
+
+    stat(dirpath, &stbuf);
+    if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+        DIR *imfd = opendir(dirpath);
+        if (imfd) {
+            int size;
+            struct dirent *entry = NULL;
+            while ((entry = readdir(imfd)) != NULL) {
+                char *entrpath = malloc(PATH_MAX);
+                if (entrpath) {
+                    entrpath[0] = '\0';
+                    strcat(entrpath, dirpath);
+
+                    strcat(entrpath, "/");
+                    strcat(entrpath, entry->d_name);
+                    if (strncmp(entry->d_name, ".", strlen(entry->d_name)) && strncmp(entry->d_name, "..", strlen(entry->d_name))) {
+                        size = listxattr(entrpath, 0, 0);
+                        if (size > 0) {
+                            char* list = malloc(size);
+                            if (list) {
+                                listxattr(entrpath, list, size);
+                                int sum = 0;
+                                char *s = list;
+                                char *p;
+                                while (sum < size) {
+                                    sum += strlen(s)+1;
+                                    p = strstr(s, "user.smtfs");
+                                    if (p) {
+                                        removexattr(entrpath, p);
+                                    }
+                                    s = strchr(s, '\0');
+                                    s++;
+                                }
+                                free(list);
+                            }
+                        }
+
+                        remove_xattr_from_dir(entrpath);
+                    }
+
+                    free(entrpath);
+                }
+            }
+            closedir(imfd);
+        } else {
+            printf("remove_xattr_from_dir: Couldn't open directory.\n");
+        }
+    }
 }
 
 void export_metadata_txt(char* storagepath) {
@@ -316,8 +363,8 @@ void export_metadata_txt(char* storagepath) {
                                                 s = strchr(s, '\0');
                                                 s++;
                                             }
+                                            free(list);
                                         }
-                                        free(list);
                                     }
                                     memset(&stbuf, 0, sizeof(stbuf));
                                     free(entrpath);

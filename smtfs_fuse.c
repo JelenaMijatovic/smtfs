@@ -1704,13 +1704,13 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
     fuse_reply_err(req, saverr);
 }
 
-int is_importdir_invalid(char* importdir) {
-    DIR *imfd = opendir(importdir);
+int is_dir_invalid(char* dirpath) {
+    DIR *imfd = opendir(dirpath);
     if (imfd) {
         closedir(imfd);
         return 0;
     } else {
-        printf("Incorrect import argument\n");
+        printf("Requested path %s is not a directory\n", dirpath);
         return 1;
     }
 }
@@ -1750,6 +1750,7 @@ enum {
 
 static struct fuse_opt smtfs_opts[] = {
      SMTFS_OPT("import=%s",         import, 0),
+     SMTFS_OPT("clear=%s",          clear, 0),
      SMTFS_OPT("-p",                passthrough, 1),
      SMTFS_OPT("--passthrough",     passthrough, 1),
      SMTFS_OPT("-li",               refresh, 1),
@@ -1784,9 +1785,10 @@ int main(int argc, char **argv)
     if (opts.show_help) {
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
         printf("smtfs options:\n"
-               "    -import='source_dir[&dir2]'    import existing directories\n"
+               "    -o import='source_dir[&dir2]'    import existing directories\n"
                "    -p   --passthrough             pass operations to the import directory\n"
                "    --dump                         export smtfs file tagging metadata to a text file and exit\n"
+               "    -o clear='source_dir[&dir2]'     clear all smtfs xattrs from previous import directories\n"
                "fuse options:\n");
         fuse_cmdline_help();
         fuse_lowlevel_help();
@@ -1840,6 +1842,36 @@ int main(int argc, char **argv)
 
     if (conf.dump) {
         export_metadata_txt(storage);
+
+        closedir(rootdir);
+        free(opts.mountpoint);
+        free(dirpath);
+        free(storage);
+        free(backup);
+        free(devfile);
+        fuse_opt_free_args(&args);
+        return 0;
+    }
+
+    if (conf.clear) {
+        char *cleardir = conf.clear;
+        if (strchr(conf.clear, '&')) {
+            char *q = cleardir;
+            while ((q = strchr(q, '&'))) {
+                *q = '\0';
+                if (!is_dir_invalid(cleardir)) {
+                    remove_xattr_from_dir(cleardir);
+                }
+                *q = '&';
+                cleardir = ++q;
+            }
+        }
+        if (!is_dir_invalid(cleardir)) {
+            remove_xattr_from_dir(cleardir);
+        }
+        printf("smtfs: Clear complete!\n");
+
+        free(conf.clear);
         closedir(rootdir);
         free(opts.mountpoint);
         free(dirpath);
@@ -1856,7 +1888,7 @@ int main(int argc, char **argv)
             char *q = importdir;
             while ((q = strchr(q, '&'))) {
                 *q = '\0';
-                if (is_importdir_invalid(importdir)) {
+                if (is_dir_invalid(importdir)) {
                     free(opts.mountpoint);
                     fuse_opt_free_args(&args);
                     return 1;
@@ -1865,7 +1897,7 @@ int main(int argc, char **argv)
                 importdir = ++q;
             }
         }
-        if (is_importdir_invalid(importdir)) {
+        if (is_dir_invalid(importdir)) {
             free(opts.mountpoint);
             fuse_opt_free_args(&args);
             return 1;
