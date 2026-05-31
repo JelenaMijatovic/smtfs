@@ -221,58 +221,48 @@ void read_importdir(char* path, DIR *imfd, ino_t parent, char* parentname) {
 
 void import_dir(char* importroot) {
 
-    char* path = malloc(PATH_MAX);
-    if (path) {
-        path[0] = '\0';
-        strcat(path, importroot);
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
 
-        struct stat stbuf;
-        memset(&stbuf, 0, sizeof(stbuf));
-
-        stat(importroot, &stbuf);
-        if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
-            DIR *imfd = opendir(importroot);
-            if (imfd) {
-                ino_t ino;
-                char *importname = strdup(basename(importroot));
-                khint_t k = kh_get(dirhash, dirh, importname);
-                if (k == kh_end(dirh)) {
-                    if (freemap->nextfr) {
-                        ino = freemap->ino;
-                        struct freeino *temp = freemap;
-                        freemap = freemap->nextfr;
-                        free(temp);
-                    }
-                    else {
-                        ino = freemap->ino++;
-                    }
-                    add_directory(importname, ino);
-                    open_file(ino, importname, 0777 | S_IFDIR);
-
-                    append_dir_contents(TAGS, ino);
-                    set_file_xattr(ino, TAGS_FN, ADD);
+    stat(importroot, &stbuf);
+    if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+        DIR *imfd = opendir(importroot);
+        if (imfd) {
+            ino_t ino;
+            char *importname = strdup(basename(importroot));
+            khint_t k = kh_get(dirhash, dirh, importname);
+            if (k == kh_end(dirh)) {
+                if (freemap->nextfr) {
+                    ino = freemap->ino;
+                    struct freeino *temp = freemap;
+                    freemap = freemap->nextfr;
+                    free(temp);
                 } else {
-                    struct dirinfo *dir = kh_val(dirh, k);
-                    ino = dir->ino;
+                    ino = freemap->ino++;
                 }
+                add_directory(importname, ino);
+                open_file(ino, importname, 0777 | S_IFDIR);
 
-                read_importdir(importroot, imfd, ino, importname);
-
-                add_openfile(ino);
-                add_filetodir(HOME_FN, ino);
-                set_file_xattr(ino, HOME_FN, ADD);
-
-                free(importname);
-                closedir(imfd);
+                append_dir_contents(TAGS, ino);
+                set_file_xattr(ino, TAGS_FN, ADD);
             } else {
-               printf("import_dir: Couldn't open import directory, import aborted.");
+                struct dirinfo *dir = kh_val(dirh, k);
+                ino = dir->ino;
             }
+
+            read_importdir(importroot, imfd, ino, importname);
+
+            add_openfile(ino);
+            add_filetodir(HOME_FN, ino);
+            set_file_xattr(ino, HOME_FN, ADD);
+
+            free(importname);
+            closedir(imfd);
         } else {
-            printf("import_dir: Import path isn't directory, import aborted.");
+            printf("import_dir: Couldn't open import directory, import aborted.\n");
         }
-        free(path);
     } else {
-        printf("import_dir: Memory allocation fail, import aborted.");
+        printf("import_dir: Import path isn't directory, import aborted.\n");
     }
 }
 
