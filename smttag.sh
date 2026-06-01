@@ -1,7 +1,7 @@
 #! /bin/bash
 
 if [ $# -lt 3 ]; then
-    echo "Usage: smttag [-r] tags... -f files...|-d directories..."
+    echo "Usage: smttag [-r] <tag>... ([-f <file>...] [-d <directory>...])"
     exit 1
 fi
 
