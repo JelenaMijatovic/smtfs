@@ -1782,29 +1782,35 @@ int main(int argc, char **argv)
     if (fuse_parse_cmdline(&args, &opts)) {
         return 1;
     }
+
     if (opts.show_help) {
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
         printf("smtfs options:\n"
                "    -o import='source_dir[&dir2]'    import existing directories\n"
-               "    -p   --passthrough             pass operations to the import directory\n"
-               "    --dump                         export smtfs file tagging metadata to a text file and exit\n"
-               "    -o clear='source_dir[&dir2]'     clear all smtfs xattrs from previous import directories\n"
+               "    -p   --passthrough               pass operations to the import directory\n"
+               "    --dump                           export smtfs file tagging metadata to a text file and exit\n"
+               "    -o clear='source_dir[&dir2]'     clear all smtfs xattrs from previous import directories and exit\n"
                "fuse options:\n");
         fuse_cmdline_help();
         fuse_lowlevel_help();
+
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
         return 0;
     }
+
     if (opts.show_version) {
         printf("FUSE library version %s\n", fuse_pkgversion());
         fuse_lowlevel_version();
+
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
         return 0;
     }
+
     if (opts.mountpoint == NULL) {
         printf("Usage: %s <mountpoint> [options]\n", argv[0]);
+
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
         return 1;
@@ -1835,22 +1841,17 @@ int main(int argc, char **argv)
         mkdir(backup, 0700);
         conf.backup = backup;
     } else {
-        free(opts.mountpoint);
-        fuse_opt_free_args(&args);
-        return 1;
+        retval = 1;
+        goto errlabel_three;
     }
 
     if (conf.dump) {
         export_metadata_txt(storage);
 
-        closedir(rootdir);
-        free(opts.mountpoint);
-        free(dirpath);
-        free(storage);
-        free(backup);
-        free(devfile);
-        fuse_opt_free_args(&args);
-        return 0;
+        if (!conf.clear) {
+            retval = 0;
+            goto errlabel_three;
+        }
     }
 
     if (conf.clear) {
@@ -1872,14 +1873,8 @@ int main(int argc, char **argv)
         printf("smtfs: Clear complete!\n");
 
         free(conf.clear);
-        closedir(rootdir);
-        free(opts.mountpoint);
-        free(dirpath);
-        free(storage);
-        free(backup);
-        free(devfile);
-        fuse_opt_free_args(&args);
-        return 0;
+        retval = 0;
+        goto errlabel_three;
     }
 
     if (conf.import) { //check all import sources
@@ -1889,26 +1884,23 @@ int main(int argc, char **argv)
             while ((q = strchr(q, '&'))) {
                 *q = '\0';
                 if (is_dir_invalid(importdir)) {
-                    free(opts.mountpoint);
-                    fuse_opt_free_args(&args);
-                    return 1;
+                    retval = 1;
+                    goto errlabel_three;
                 }
                 *q = '&';
                 importdir = ++q;
             }
         }
         if (is_dir_invalid(importdir)) {
-            free(opts.mountpoint);
-            fuse_opt_free_args(&args);
-            return 1;
+            retval = 1;
+            goto errlabel_three;
         }
     }
 
     se = fuse_session_new(&args, &operations, sizeof(operations), &conf);
     if (se == NULL) {
-        free(opts.mountpoint);
-        fuse_opt_free_args(&args);
-        return 1;
+        retval = 1;
+        goto errlabel_three;
     }
 
     if (fuse_set_signal_handlers(se) != 0) {
@@ -1924,19 +1916,23 @@ int main(int argc, char **argv)
     fuse_session_loop(se);
 
     fuse_session_unmount(se);
+
 errlabel_one:
     fuse_remove_signal_handlers(se);
 
 errlabel_two:
     fuse_session_destroy(se);
+
+errlabel_three:
     free(opts.mountpoint);
+    fuse_opt_free_args(&args);
     free(devfile);
-    closedir(rootdir);
     free(conf.import);
     free(conf.storage);
     free(conf.backup);
     free(dirpath);
+    closedir(rootdir);
     close(conf.root_fd);
-    fuse_opt_free_args(&args);
+
     return retval;
 }
