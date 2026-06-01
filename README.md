@@ -8,7 +8,9 @@ smtfs requires a Linux system that supports extended file attributes and has [FU
  ./smtfs mount_location [--dump] [-p|--passthrough] [-o import=<source_directory>|<clear=source_directory>]
 ```
 The passthrough option enables the user to rename and delete files **in the source directory(!)** through smtfs.
+
 The dump option creates a text dump of all files' basic info including tags and exists immediately.
+
 The clear option removes all of smtfs' xattrs from files in the requested directory and exists immediately.
 
 Multiple source directories can be imported or cleared at once by appending them with '&' within single quotes:
