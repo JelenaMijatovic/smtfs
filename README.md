@@ -5,7 +5,7 @@ smtfs requires a Linux system that supports extended file attributes and has [FU
 
 **Mounting**
 ```
- ./smtfs mount_location [--dump] [-p|--passthrough] [-o import=<source_directory>|<clear=source_directory>]
+ ./smtfs <mount_location> [--dump] [-h|--help] [-p|--passthrough] [-o import=<source_directory>] [-o clear=<source_directory>]
 ```
 The passthrough option enables the user to rename and delete files **in the source directory(!)** through smtfs.
 
@@ -15,12 +15,12 @@ The clear option removes all of smtfs' xattrs from files in the requested direct
 
 Multiple source directories can be imported or cleared at once by appending them with '&' within single quotes:
 ```
- ./smtfs mount_location -o import='srcdir1&srcdir2'
+ ./smtfs <mount_location> -o import='<srcdir1>&<srcdir2>'
 ```
 
 **Unmounting**
 ```
- fusermount3 -u mount_location
+ fusermount3 -u <mount_location>
 ```
 **File operations**
 
@@ -29,7 +29,7 @@ Entirely removing a file or directory from smtfs is done via removing it in the 
 
 A simple Bash script is included for multi-tagging:
 ```
- ./smttag.sh [-r] tags... -f files... -d directories...
+ ./smttag.sh [-r] <tag>... ([-f <file>...] [-d <directory>...])
 ```
 Passing a directory with '-f' will tag the directory itself, while passing it with '-d' will tag all its contents. Passing '-r' removes tags.
 
