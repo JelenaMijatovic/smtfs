@@ -35,4 +35,4 @@ Passing a directory with '-f' will tag the directory itself, while passing it wi
 
 **Notes**
 
-smtfs uses [klib](https://github.com/attractivechaos/klib) (licensed under [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/eaa99ad6db5ac75314d54dc59e0a37546cb05654/NOTICE.md)) for data structure implementation.
+smtfs uses [klib](https://github.com/attractivechaos/klib) (licensed under [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/eaa99ad6db5ac75314d54dc59e0a37546cb05654/NOTICE.md)) for hash table and sorting algorithm implementation.
