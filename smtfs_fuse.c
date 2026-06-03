@@ -555,12 +555,16 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
             char *q = importdir;
             while ((q = strchr(q, '&'))) {
                 *q = '\0';
-                add_import(importdir);
+                char *fullpath = realpath(q, NULL);
+                add_import(fullpath);
                 *q = '&';
                 importdir = ++q;
+                free(fullpath);
             }
         }
-        add_import(importdir);
+        char *fullpath = realpath(importdir, NULL);
+        add_import(fullpath);
+        free(fullpath);
     }
 
     add_opendir(ROOT);
