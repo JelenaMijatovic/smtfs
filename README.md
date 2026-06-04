@@ -9,9 +9,9 @@ smtfs requires a Linux system that supports extended file attributes and has [FU
 ```
 The passthrough option enables the user to rename and delete files **in the source directory(!)** through smtfs.
 
-The dump option creates a text dump of all files' basic info including tags and exists immediately.
+The dump option creates a text dump of all files' basic info including tags and exits immediately.
 
-The clear option removes all of smtfs' xattrs from files in the requested directory and exists immediately.
+The clear option removes all of smtfs' xattrs from files in the requested directory and exits immediately.
 
 Multiple source directories can be imported or cleared at once by appending them with '&' within single quotes:
 ```
@@ -35,4 +35,4 @@ Passing a directory with '-f' will tag the directory itself, while passing it wi
 
 **Notes**
 
-smtfs uses [klib](https://github.com/attractivechaos/klib) (licensed under [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/eaa99ad6db5ac75314d54dc59e0a37546cb05654/NOTICE.md)) for data structure implementation.
+smtfs uses [klib](https://github.com/attractivechaos/klib) (licensed under [MIT license](https://github.com/JelenaMijatovic/smtfs/blob/eaa99ad6db5ac75314d54dc59e0a37546cb05654/NOTICE.md)) for hash table and sorting algorithm implementation.
