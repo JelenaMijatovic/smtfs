@@ -5,10 +5,8 @@
 #include <stdbool.h>
 #include <sys/sysmacros.h>
 #include <limits.h>
-#include <libgen.h>
 
 static void smt_destroy(void *userdata);
-char *devfile = NULL;
 struct smtfs_config config;
 
 void fatal_error(const char *message) {
@@ -528,6 +526,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     struct fuse_smt_userdata *fuseconf = userdata;
     config.passthrough = fuseconf->passthrough;
     config.root_fd = fuseconf->root_fd;
+    config.devfile = fuseconf->devfile;
     config.storage = fuseconf->storage;
     config.backup = fuseconf->backup;
     config.dev = fuseconf->dev;
@@ -1820,8 +1819,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    devfile = realpath(opts.mountpoint, NULL);
-    DIR *rootdir = opendir(devfile);
+    conf.devfile = realpath(opts.mountpoint, NULL);
+    if (!conf.devfile) {
+        free(opts.mountpoint);
+        fuse_opt_free_args(&args);
+        return 1;
+    }
+
+    DIR *rootdir = opendir(conf.devfile);
     conf.root_fd = dirfd(rootdir);
     struct stat stbuf;
     memset(&stbuf, 0, sizeof(stbuf));
@@ -1831,17 +1836,21 @@ int main(int argc, char **argv)
 
     char *storage = malloc(PATH_MAX);
     char *backup = malloc(PATH_MAX);
-    char *dirpath = strdup(dirname(devfile));
-    if (storage && backup) {
+    char *dirpath = dirname(strdup(conf.devfile));
+    if (storage && backup && dirpath) {
         storage[0] = '\0';
         strcat(storage, dirpath);
-        strcat(storage, "/.smtfs_storage");
+        strcat(storage, "/.smtfs_");
+        strcat(storage, basename(conf.devfile));
+        strcat(storage, "_storage");
         mkdir(storage, 0700);
         conf.storage = storage;
 
         backup[0] = '\0';
         strcat(backup, dirpath);
-        strcat(backup, "/.smtfs_backup");
+        strcat(backup, "/.smtfs_");
+        strcat(backup, basename(conf.devfile));
+        strcat(backup, "_backup");
         mkdir(backup, 0700);
         conf.backup = backup;
     } else {
@@ -1850,7 +1859,7 @@ int main(int argc, char **argv)
     }
 
     if (conf.dump) {
-        export_metadata_txt(storage);
+        export_metadata_txt(conf.devfile, storage);
 
         if (!conf.clear) {
             retval = 0;
@@ -1930,11 +1939,11 @@ errlabel_two:
 errlabel_three:
     free(opts.mountpoint);
     fuse_opt_free_args(&args);
-    free(devfile);
+    free(dirpath);
+    free(conf.devfile);
     free(conf.import);
     free(conf.storage);
     free(conf.backup);
-    free(dirpath);
     closedir(rootdir);
     close(conf.root_fd);
 

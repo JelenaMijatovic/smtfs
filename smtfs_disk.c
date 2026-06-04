@@ -282,9 +282,16 @@ void remove_xattr_from_dir(char* dirpath) {
     }
 }
 
-void export_metadata_txt(char* storagepath) {
-    char *txtpath = get_file_path(devfile, "/datadump.txt");
+void export_metadata_txt(char* devfile, char* storagepath) {
+    char *txtpath = malloc(PATH_MAX);
+    char *dirpath = dirname(strdup(devfile));
     if (txtpath) {
+        txtpath[0] = '\0';
+        strcat(txtpath, dirpath);
+        strcat(txtpath, "/");
+        strcat(txtpath, basename(devfile));
+        strcat(txtpath, "_datadump.txt");
+
         int newfd = open(txtpath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
             char *filepath = NULL;
@@ -377,11 +384,12 @@ void export_metadata_txt(char* storagepath) {
                     free(filepath);
                 }
             }
-            printf("smtfs: Dump finished! Created file datadump.txt\n");
+            printf("smtfs: Dump finished! Created file %s\n", txtpath);
         } else {
             printf("export_metadata_txt: Couldn't write text dump!\n");
         }
         free(txtpath);
         close(newfd);
     }
+    free(dirpath);
 }

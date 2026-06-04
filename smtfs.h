@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libgen.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
@@ -46,7 +47,8 @@ struct fuse_smt_userdata {
     int root_fd;
     dev_t dev;
     blksize_t blksize;
-    char* clear;
+    char *devfile;
+    char *clear;
     char *import;
     char *storage;
     char *backup;
@@ -57,6 +59,7 @@ struct smtfs_config {
     int root_fd;
     dev_t dev;
     blksize_t blksize;
+    char *devfile;
     char *storage;
     char *backup;
 };
@@ -158,7 +161,7 @@ int find_fname_pos(struct strarr *entries, char *fname);
 ino_t insert_fname(struct strarr *entries, char *fname, ino_t ino);
 ino_t remove_fname(struct strarr *entries, char *fname);
 
-struct dirinfo* add_directory(const char* name, ino_t ino);
+struct dirinfo* add_directory(const char *name, ino_t ino);
 void remove_directory(const char *name);
 
 int add_filetodir(const char *dirname, ino_t fileino);
@@ -174,41 +177,32 @@ void remove_openfile(ino_t ino);
 khint_t add_opendir(ino_t ino);
 void remove_opendir(ino_t ino);
 
-ino_t dirset(const char* name, const char *pos);
+ino_t dirset(const char *name, const char *pos);
 
 //smtfs_disk.c
-char* get_ino_path(char* root, ino_t ino); //storageroot/(ino/DIRSPLIT)/ino
-char* get_file_path(char* root, char* filename); //storageroot/filename
+char* get_ino_path(char *root, ino_t ino); //storageroot/(ino/DIRSPLIT)/ino
+char* get_file_path(char *root, char *filename); //storageroot/filename
 
-void* get_xattr_from_file(ino_t ino, char* name);
+void* get_xattr_from_file(ino_t ino, char *name);
 void set_file_xattr(ino_t ino, const char *tag, int mode);
 
-int open_file(ino_t ino, const char* name, mode_t mode);
+int open_file(ino_t ino, const char *name, mode_t mode);
 void delete_file_on_disk(ino_t ino, mode_t mode);
 
-void create_symlink(ino_t ino, char* name, char* target);
-void rename_symlink(ino_t ino, char* newname);
+void create_symlink(ino_t ino, char *name, char *target);
+void rename_symlink(ino_t ino, char *newname);
 
 void write_dir_contents(ino_t dirino, struct inoarr *fileinos);
 void append_dir_contents(ino_t dirino, ino_t fileino);
 
-void remove_xattr_from_dir(char* dirpath);
-void export_metadata_txt(char* storagepath);
+void remove_xattr_from_dir(char *dirpath);
+void export_metadata_txt(char *devpath, char *storagepath);
 
 //smtfs_fuse.c
-extern char *devfile;
-
 void fatal_error(const char *message);
 
 void smtfs_setup();
 void smtfs_load();
-
-int is_import_new(char* importroot);
-void read_importdir(char* path, DIR *imfd, ino_t parent, char* parentname);
-void import_dir(char* importroot);
-void add_import(char* importdir);
-void refresh_importdir(char* path, ino_t parent, char* parentname);
-void refresh_imports();
 
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 
