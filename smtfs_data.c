@@ -108,7 +108,6 @@ int find_fname_pos(struct strarr *entries, char *fname) {
 }
 
 ino_t insert_fname(struct strarr *entries, char *fname, ino_t ino) {
-    printf("insert %s\n", fname);
     if (entries->size == 0) {
         entries->entries[0].name = fname;
         entries->entries[0].ino = ino;
@@ -117,7 +116,6 @@ ino_t insert_fname(struct strarr *entries, char *fname, ino_t ino) {
     }
     int pos = find_fname_pos(entries, fname);
     int res = strcmp(entries->entries[pos].name, fname);
-    printf("%s res %d\n", entries->entries[pos].name, res);
     if (res) {
         entries->size++;
         if (entries->size > entries->exp) {
@@ -524,7 +522,7 @@ khint_t add_openfile(ino_t ino) {
         f->nlink = 2;
     }
     free(nlink);
-    f->nref = 1;
+    f->nref = 0;
 
     struct stat stbuf;
     struct statx stxbuf;
@@ -605,6 +603,7 @@ void remove_openfile(ino_t ino) {
             if (filepath) {
                 setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
                 setxattr(filepath, "user.smtfs_m.nlink", &f->nlink, sizeof(f->nlink), 0);
+
                 struct timespec times[2];
                 times[0].tv_sec = f->atime.tv_sec;
                 times[0].tv_nsec = f->atime.tv_nsec;
@@ -635,17 +634,19 @@ khint_t add_opendir(ino_t ino) {
     }
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+
         if ((f->mode & S_IFMT) == S_IFDIR) {
             k = kh_get(opendirhash, opendirh, ino);
             if (k == kh_end(opendirh)) {
-                if (kh_size(opendirh) >= MAX_OPEN) {
+                if (kh_size(opendirh) >= MAX_OPEN) { //!opendir/releasedir opendir nref
                     struct vst *visits = lvisit.visits;
                     struct vst t = ks_ksmall(vst, MAX_OPEN, visits, 0);
-                    if (t.ino == ROOT) {
+                    if (t.ino == ROOT) { //keep root directory loaded in
                         t = ks_ksmall(vst, MAX_OPEN, visits, 1);
                     }
                     remove_opendir(t.ino);
                 }
+
                 struct opendirinfo *dir = malloc(sizeof(struct opendirinfo));
                 if (dir) {
                     dir->index = lvisit.currindex++;
@@ -684,16 +685,17 @@ khint_t add_opendir(ino_t ino) {
                     } else {
                         fatal_error("add_opendir: Couldn't allocate memory\n");
                     }
-                    if (ino != FILES && ino != TAGS) { //!loading files for these two would be like loading in the entire FS
-                        khint_t k;
+
+                    if (ino != FILES && ino != TAGS) { //!load up to MAX_DIRSIZE
+                        khint_t k1;
                         for (int i = 0; i < dir->fileinos->size; i++) {
-                            k = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
-                            if (k == kh_end(fcache)) {
+                            k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
+                            if (k1 == kh_end(fcache)) {
                                 add_openfile(dir->fileinos->inos[i]);
-                            } else {
-                                struct openfileinfo *f = kh_value(fcache, k);
-                                f->nref++;
+                                k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
                             }
+                            struct openfileinfo *f = kh_value(fcache, k1);
+                            f->nref++;
                         }
                     }
 
