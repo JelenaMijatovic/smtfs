@@ -567,7 +567,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     }
 
     add_opendir(ROOT);
-    add_opendir(HOME);
+    //!add_opendir(HOME);
     refreshdir(NULL, NULL, ROOT, 0);
 }
 
@@ -816,17 +816,19 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
     struct openfileinfo *f = NULL;
     struct dirinfo *dir = NULL;
-    khint_t k;
-    k = kh_get(openfilehash, fcache, ino);
-    if (k != kh_end(fcache)) {
-        f = kh_val(fcache, k);
-        k = kh_get(dirhash, dirh, f->name);
-        if (k != kh_end(dirh)) {
-            dir = kh_val(dirh, k);
-        }
-    }
+    khint_t k, kd;
 
     k = add_opendir(ino);
+
+    kd = kh_get(openfilehash, fcache, ino);
+    if (kd != kh_end(fcache)) {
+        f = kh_val(fcache, kd);
+
+        kd = kh_get(dirhash, dirh, f->name);
+        if (kd != kh_end(dirh)) {
+            dir = kh_val(dirh, kd);
+        }
+    }
 
     if (k != kh_end(opendirh) && dir != NULL) {
         khash_t(filenamehash) *fnh = kh_init(filenamehash);
@@ -919,13 +921,11 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
     }
 }
 
-static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
-{
+static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     struct fuse_entry_param e;
-    khint_t k;
-    struct openfileinfo *f = NULL;
-
     memset(&e, 0, sizeof(e));
+    struct openfileinfo *f = NULL;
+    khint_t k;
 
     k = add_opendir(parent);
 
@@ -939,7 +939,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
                 f = kh_value(fcache, k);
             }
         }
-    } else if (!strncmp("..", name, strlen(".."))) {
+    } else if (!strncmp("..", name, strlen(".."))) { //!try from start
         k = kh_get(openfilehash, fcache, ROOT);
         if (k != kh_end(fcache)) {
             f = kh_value(fcache, k);
@@ -959,7 +959,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
         e.entry_timeout = 10.0;
 
         if ((f->mode & S_IFMT) == S_IFDIR) {
-            refreshdir(req, NULL, f->ino, 0);
+            refreshdir(req, NULL, f->ino, 0); //!called both on cd and ls
         }
 
         fuse_reply_entry(req, &e);
