@@ -598,7 +598,7 @@ void remove_openfile(ino_t ino) {
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
         f->nref--;
-        if (!f->nref) {
+        if (f->nref < 1) {
             char *filepath = get_ino_path(config.storage, ino);
             if (filepath) {
                 setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
