@@ -554,16 +554,20 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
             char *q = importdir;
             while ((q = strchr(q, '&'))) {
                 *q = '\0';
-                char *fullpath = realpath(q, NULL);
-                add_import(fullpath);
+                char *fullpath = realpath(importdir, NULL);
+                if (fullpath) {
+                    add_import(fullpath);
+                    free(fullpath);
+                }
                 *q = '&';
                 importdir = ++q;
-                free(fullpath);
             }
         }
         char *fullpath = realpath(importdir, NULL);
-        add_import(fullpath);
-        free(fullpath);
+        if (fullpath) {
+            add_import(fullpath);
+            free(fullpath);
+        }
     }
 
     add_opendir(ROOT);
@@ -926,7 +930,6 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     memset(&e, 0, sizeof(e));
     struct openfileinfo *f = NULL;
     khint_t k;
-
     k = add_opendir(parent);
 
     if (k != kh_end(opendirh)) {
@@ -938,11 +941,6 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
             if (k != kh_end(fcache)) {
                 f = kh_value(fcache, k);
             }
-        }
-    } else if (!strncmp("..", name, strlen(".."))) { //!try from start
-        k = kh_get(openfilehash, fcache, ROOT);
-        if (k != kh_end(fcache)) {
-            f = kh_value(fcache, k);
         }
     }
 
@@ -1005,6 +1003,10 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
         stbuf.st_ctim = f->ctime;
         stbuf.st_mtim = f->mtime;
         fuse_reply_attr(req, &stbuf, 1.0);
+
+        if (!f->nref) {
+            remove_openfile(ino);
+        }
     } else {
         fuse_reply_err(req, ENOENT);
     }
@@ -1061,6 +1063,10 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
         stbuf.st_ctim = f->ctime;
 
         fuse_reply_attr(req, &stbuf, 1.0);
+
+        if (!f->nref) {
+            remove_openfile(ino);
+        }
     } else {
         fuse_reply_err(req, ENOENT);
     }
@@ -1093,7 +1099,12 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
         stxbuf.stx_mtime.tv_nsec = f->mtime.tv_nsec;
         stxbuf.stx_dev_major = major(config.dev);
         stxbuf.stx_dev_minor = minor(config.dev);
+
         fuse_reply_statx(req, flags, &stxbuf, 1.0);
+
+        if (!f->nref) {
+            remove_openfile(ino);
+        }
     } else {
         fuse_reply_err(req, ENOENT);
     }
@@ -1149,14 +1160,18 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
             }
 
             if (ino) {
-                k = kh_get(openfilehash, fcache, parent);
+                k = add_openfile(parent);
                 if (k != kh_end(fcache)) {
                     struct openfileinfo *fp = kh_value(fcache, k);
                     if (parent != TAGS) {
                         add_filetodir(fp->name, ino);
                     }
 
-                    k = kh_get(openfilehash, fcache, ino);
+                    if (!fp->nref) {
+                        remove_openfile(parent);
+                    }
+
+                    k = add_openfile(ino);
                     if (k != kh_end(fcache)) {
                         struct openfileinfo *f = kh_value(fcache, k);
 
@@ -1170,6 +1185,10 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
                             fuse_reply_entry(req, &e);
                         } else {
                             fuse_reply_err(req, f->fd);
+                        }
+
+                        if (!f->nref) {
+                            remove_openfile(ino);
                         }
                     } else {
                         fuse_reply_err(req, ENOENT);
@@ -1287,10 +1306,11 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
     struct fuse_entry_param e;
     memset(&e, 0, sizeof(e));
 
-    khint_t k = kh_get(openfilehash, fcache, parent);
+    khint_t k = add_openfile(parent);
     if (k != kh_end(fcache)) {
         struct openfileinfo *fp = kh_value(fcache, k);
-        if (freemap->ino < MAX_FILES && fp->dirinos->size < MAX_DIRSIZE) {
+
+        if (freemap->ino < MAX_FILES) {
             if (parent > TAGS && ((mode & S_IFMT) != S_IFDIR) && ((fp->mode & S_IFMT) == S_IFDIR)) {
                 ino_t ino = add_file(name, S_IFREG | mode, 0x0);
 
@@ -1298,7 +1318,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
                     add_filetodir(fp->name, ino);
                 }
 
-                k = kh_get(openfilehash, fcache, ino);
+                k = add_openfile(ino);
                 if (k != kh_end(fcache)) {
                     struct openfileinfo *f = kh_value(fcache, k);
 
@@ -1314,6 +1334,10 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
                     } else {
                         fuse_reply_err(req, EBADF);
                     }
+
+                    if (!f->nref) {
+                        remove_openfile(ino);
+                    }
 				} else {
 					fuse_reply_err(req, ENOENT);
 				}
@@ -1323,6 +1347,10 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
         } else {
             fuse_reply_err(req, ENOSPC);
         }
+
+        if (!fp->nref) {
+            remove_openfile(parent);
+        }
         return;
     }
 
@@ -1331,7 +1359,7 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
 
 static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
 
-    khint_t k = kh_get(openfilehash, fcache, ino);
+    khint_t k = add_openfile(ino); //!smt_release
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
         if ((f->mode & S_IFMT) != S_IFDIR) {
@@ -1370,10 +1398,7 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
 static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     (void) fi;
 
-    khint_t k = kh_get(openfilehash, fcache, ino);
-    if (k == kh_end(fcache)) {
-        k = add_openfile(ino);
-    }
+    khint_t k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
         if ((f->mode & S_IFMT) == S_IFDIR) {
@@ -1400,6 +1425,7 @@ static void smt_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, str
         }
         return;
     }
+
     fuse_reply_err(req, ENOENT);
 }
 
@@ -1408,7 +1434,6 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
     khint_t k;
 
     k = add_opendir(parent);
-
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
@@ -1508,7 +1533,6 @@ static void smt_flush(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 	res = close(dup(fi->fh));
 	fuse_reply_err(req, res == -1 ? errno : 0);
 }
-//! custom release?
 
 static void smt_statfs(fuse_req_t req, fuse_ino_t ino)
 {
