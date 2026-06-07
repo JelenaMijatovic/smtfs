@@ -69,6 +69,7 @@ extern struct smtfs_config config;
 //freemap
 struct freeino {
     ino_t ino;
+    ino_t used;
     struct freeino *nextfr;
 };
 

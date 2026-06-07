@@ -360,6 +360,7 @@ int add_sysdirs(const char *name, mode_t mode) {
             }
 
             ino_t ino = freemap->ino;
+            ++freemap->used;
             if (freemap->nextfr) {
                 struct freeino *t = freemap;
                 freemap = freemap->nextfr;
@@ -442,6 +443,7 @@ ino_t add_file(const char *name, mode_t mode, off_t size) {
             }
 
             ino_t ino = freemap->ino;
+            ++freemap->used;
             if (freemap->nextfr) {
                 struct freeino *t = freemap;
                 freemap = freemap->nextfr;
@@ -489,6 +491,7 @@ void remove_file(ino_t ino) {
 
     struct freeino *newino = calloc(1, sizeof(struct freeino));
     newino->ino = ino;
+    --freemap->used;
     if (ino < freemap->ino) {
         newino->nextfr = freemap;
         freemap = newino;
