@@ -228,6 +228,7 @@ int add_filetodir(const char *dirname, ino_t fileino) {
         struct dirinfo *dir = kh_val(dirh, k);
 
         k = add_opendir(dir->ino);
+
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
 		if (opendir->fileinos->size >= MAX_DIRSIZE) {
@@ -246,18 +247,23 @@ int add_filetodir(const char *dirname, ino_t fileino) {
                 insert_ino(f->dirinos, dir->ino);
                 f->nlink++;
                 clock_gettime(CLOCK_REALTIME, &f->ctime);
+
                 k = kh_get(openfilehash, fcache, dir->ino);
                 if (k != kh_end(fcache)) {
                     struct openfileinfo *f1 = kh_value(fcache, k);
-                    clock_gettime(CLOCK_REALTIME, &f1->ctime);
+                    clock_gettime(CLOCK_REALTIME, &f1->ctime);//!direct
                     clock_gettime(CLOCK_REALTIME, &f1->mtime);
                 }
             }
 
-            k = kh_get(openfilehash, fcache, dir->ino);
+            k = add_openfile(dir->ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f1 = kh_value(fcache, k);
                 set_file_xattr(fileino, f1->name, ADD);
+
+                if (!f->nref) {
+                    remove_openfile(dir->ino);
+                }
             }
 
             refreshdir(NULL, NULL, dir->ino, 0);
@@ -290,10 +296,11 @@ void remove_filefromdir(const char *dirname, ino_t fileino) {
             remove_ino(f->dirinos, dir->ino);
             f->nlink--;
             clock_gettime(CLOCK_REALTIME, &f->ctime);
-            k = add_openfile(dir->ino);
+
+            k = kh_get(openfilehash, fcache, dir->ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f1 = kh_value(fcache, k);
-                clock_gettime(CLOCK_REALTIME, &f1->ctime);
+                clock_gettime(CLOCK_REALTIME, &f1->ctime);//!direct
                 clock_gettime(CLOCK_REALTIME, &f1->mtime);
             }
         }
@@ -302,6 +309,10 @@ void remove_filefromdir(const char *dirname, ino_t fileino) {
         if (k != kh_end(fcache)) {
             struct openfileinfo *f1 = kh_value(fcache, k);
             set_file_xattr(fileino, f1->name, RMV);
+
+            if (!f->nref) {
+                remove_openfile(dir->ino);
+            }
         }
 
         refreshdir(NULL, NULL, dir->ino, 0);
@@ -464,6 +475,7 @@ void remove_file(ino_t ino) {
     k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+
         while (f->dirinos->size) {
             k1 = add_openfile(f->dirinos->inos[0]);
             if (k1 != kh_end(fcache)) {
@@ -512,7 +524,6 @@ khint_t add_openfile(ino_t ino) {
         return k;
     }
 
-    k = kh_end(fcache);
     struct openfileinfo *f = malloc(sizeof(struct openfileinfo));
     f->ino = ino;
     f->fd = 0;
@@ -596,10 +607,11 @@ khint_t add_openfile(ino_t ino) {
 }
 
 void remove_openfile(ino_t ino) {
-    khint_t k = kh_get(openfilehash, fcache, ino);
 
+    khint_t k = kh_get(openfilehash, fcache, ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
+
         f->nref--;
         if (f->nref < 1) {
             char *filepath = get_ino_path(config.storage, ino);
@@ -631,10 +643,7 @@ khint_t add_opendir(ino_t ino) {
     khint_t k;
     int absent;
 
-    k = kh_get(openfilehash, fcache, ino);
-    if (k == kh_end(fcache)) {
-        k = add_openfile(ino);
-    }
+    k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
 
