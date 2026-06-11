@@ -68,9 +68,9 @@ extern struct smtfs_config config;
 
 //freemap
 struct freeino {
-    ino_t ino;
-    ino_t used;
-    struct freeino *nextfr;
+    ino_t ino; //first free inode
+    ino_t used; //used inode count
+    struct freeino *nextfr; //free inode list
 };
 
 extern struct freeino *freemap;
@@ -87,12 +87,12 @@ extern khash_t(dirhash) *dirh;
 struct inoarr {
     ino_t *inos;
     int size;
-    int exp;
+    int exp; //exponent of 2
 };
 
 struct openfileinfo {
     ino_t ino;
-    int fd;
+    int fd; //file handle
     char *name;
     off_t size;
     mode_t mode;
@@ -104,7 +104,7 @@ struct openfileinfo {
     struct timespec mtime;
     struct timespec ctime;
     struct timespec btime;
-    struct inoarr *dirinos;
+    struct inoarr *dirinos; //inodes of tags
     int nref;
 };
 
@@ -123,9 +123,10 @@ struct strarr {
 };
 
 struct opendirinfo {
-    int index;
-    struct inoarr *fileinos;
-    struct strarr *filenames;
+    int openref; //non-zero if there are open handles
+    int index; //index of own entry in visits
+    struct inoarr *fileinos; //inodes of contained files
+    struct strarr *filenames; //filenames of contained files with modifications for duplicates
 };
 
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
