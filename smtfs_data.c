@@ -261,7 +261,7 @@ int add_filetodir(const char *dirname, ino_t fileino) {
                 struct openfileinfo *f1 = kh_value(fcache, k);
                 set_file_xattr(fileino, f1->name, ADD);
 
-                if (!f->nref) {
+                if (!f1->nref) {
                     remove_openfile(dir->ino);
                 }
             }
@@ -310,7 +310,7 @@ void remove_filefromdir(const char *dirname, ino_t fileino) {
             struct openfileinfo *f1 = kh_value(fcache, k);
             set_file_xattr(fileino, f1->name, RMV);
 
-            if (!f->nref) {
+            if (!f1->nref) {
                 remove_openfile(dir->ino);
             }
         }
@@ -661,6 +661,7 @@ khint_t add_opendir(ino_t ino) {
 
                 struct opendirinfo *dir = malloc(sizeof(struct opendirinfo));
                 if (dir) {
+                    dir->openref = 0;
                     dir->index = lvisit.currindex++;
                     lvisit.visits[dir->index].visit = lvisit.currvisit++;
                     lvisit.visits[dir->index].ino = ino;
