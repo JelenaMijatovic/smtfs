@@ -1086,7 +1086,7 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
     }
 }
 
-void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_file_info *fi) {
+static void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_file_info *fi) {
     struct statx stxbuf;
     memset(&stxbuf, 0, sizeof(stxbuf));
 
@@ -1125,6 +1125,7 @@ void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struct fuse_
 }
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
+
     if (off < maxsize) {
         return fuse_reply_buf(req, buf, min(bufsize, maxsize));
     } else {
@@ -1132,8 +1133,21 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, of
     }
 }
 
-void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi)
-{
+static void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+
+    khint_t k = add_opendir(ino);
+    if (k != kh_end(opendirh)) {
+        struct opendirinfo *opendir = kh_val(opendirh, k);
+        ++opendir->openref;
+
+        fuse_reply_open(req, fi);
+    } else {
+        fuse_reply_err(req, ENOENT);
+    }
+}
+
+static void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
+
     (void)fi;
     struct dirbuf b;
 
@@ -1154,6 +1168,19 @@ void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct 
 
     reply_buf_limited(req, b.p, b.size, off, b.size);
     free(b.p);
+}
+
+static void smt_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+
+    khint_t k = kh_get(opendirhash, opendirh, ino);
+    if (k != kh_end(opendirh)) {
+        struct opendirinfo *opendir = kh_val(opendirh, k);
+        --opendir->openref;
+
+        fuse_reply_err(req, 0);
+    } else {
+        fuse_reply_err(req, ENOENT);
+    }
 }
 
 static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
@@ -1811,7 +1838,9 @@ static struct fuse_lowlevel_ops operations = {
     .getattr = smt_getattr,
     .setattr = smt_setattr,
     .statx = smt_statx,
+    .opendir = smt_opendir,
     .readdir = smt_readdir,
+    .releasedir = smt_releasedir,
     .open = smt_open,
     .read = smt_read,
     .mkdir = smt_mkdir,
