@@ -524,6 +524,8 @@ khint_t add_openfile(ino_t ino) {
         return k;
     }
 
+    printf("add_openfile: %ld\n", ino);
+
     struct openfileinfo *f = malloc(sizeof(struct openfileinfo));
     f->ino = ino;
     f->fd = 0;
@@ -608,6 +610,8 @@ khint_t add_openfile(ino_t ino) {
 
 void remove_openfile(ino_t ino) {
 
+    printf("remove_openfile: %ld\n", ino);
+
     khint_t k = kh_get(openfilehash, fcache, ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
@@ -650,11 +654,21 @@ khint_t add_opendir(ino_t ino) {
         if ((f->mode & S_IFMT) == S_IFDIR) {
             k = kh_get(opendirhash, opendirh, ino);
             if (k == kh_end(opendirh)) {
-                if (kh_size(opendirh) >= MAX_OPEN) { //!opendir/releasedir opendir nref
+                printf("add_opendir: %ld\n", ino);
+
+                if (kh_size(opendirh) >= MAX_OPEN) {
                     struct vst *visits = lvisit.visits;
                     struct vst t = ks_ksmall(vst, MAX_OPEN, visits, 0);
-                    if (t.ino == ROOT) { //keep root directory loaded in
-                        t = ks_ksmall(vst, MAX_OPEN, visits, 1);
+                    int i = 1;
+                    khint_t k1 = kh_get(opendirhash, opendirh, t.ino);
+                    struct opendirinfo *dir = kh_value(opendirh, k1);
+                    while (dir->openref > 0 || t.ino == ROOT || i > MAX_OPEN-1) { //keep root directory loaded in
+                        t = ks_ksmall(vst, MAX_OPEN, visits, i++);
+                        k1 = kh_get(opendirhash, opendirh, t.ino);
+                        dir = kh_value(opendirh, k1);
+                    }
+                    if (i > MAX_OPEN-1) { //all dirs are open
+                        return kh_end(opendirh);
                     }
                     remove_opendir(t.ino);
                 }
@@ -663,7 +677,7 @@ khint_t add_opendir(ino_t ino) {
                 if (dir) {
                     dir->openref = 0;
                     dir->index = lvisit.currindex++;
-                    lvisit.visits[dir->index].visit = lvisit.currvisit++;
+                    time(&lvisit.visits[dir->index].visit);
                     lvisit.visits[dir->index].ino = ino;
 
                     dir->fileinos = malloc(sizeof(struct inoarr));
@@ -726,6 +740,9 @@ khint_t add_opendir(ino_t ino) {
 }
 
 void remove_opendir(ino_t ino) {
+
+    printf("remove_opendir: %ld\n", ino);
+
     khint_t k;
 
     k = kh_get(opendirhash, opendirh, ino);

@@ -136,13 +136,12 @@ KHASH_MAP_INIT_STR(filenamehash, int)
 
 //cache replacement
 struct vst {
-    long long visit;
+    time_t visit;
     ino_t ino;
 };
 
 struct last_visited {
     int currindex;
-    long long currvisit;
     struct vst *visits; //MAX_OPEN
 };
 

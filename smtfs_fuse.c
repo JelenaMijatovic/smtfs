@@ -519,7 +519,6 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     fcache = kh_init(openfilehash);
     opendirh = kh_init(opendirhash);
     lvisit.currindex = 0;
-    lvisit.currvisit = 0;
     lvisit.visits = calloc(MAX_OPEN, sizeof(struct vst));
     if (!lvisit.visits) {
         fatal_error("Couldn't allocate last_visited!");
@@ -850,7 +849,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
         int absent;
 
         struct opendirinfo *opendir = kh_val(opendirh, k);
-        lvisit.visits[opendir->index].visit = lvisit.currvisit++;
+        time(&lvisit.visits[opendir->index].visit);
 
         for (int i = 0; i < opendir->filenames->size; i++) {
             free(opendir->filenames->entries[i].name);
@@ -1160,7 +1159,7 @@ static void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
-        lvisit.visits[opendir->index].visit = lvisit.currvisit++;
+        time(&lvisit.visits[opendir->index].visit);
         for (int i = 0; i < opendir->filenames->size; i++) {
             dirbuf_add(req, &b, opendir->filenames->entries[i].name, opendir->filenames->entries[i].ino);
         }
