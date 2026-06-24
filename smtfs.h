@@ -194,7 +194,7 @@ void create_symlink(ino_t ino, char *name, char *target);
 void rename_symlink(ino_t ino, char *newname);
 
 void write_dir_contents(ino_t dirino, struct inoarr *fileinos);
-void append_dir_contents(ino_t dirino, ino_t fileino);
+int append_dir_contents(ino_t dirino, ino_t fileino);
 
 void remove_xattr_from_dir(char *dirpath);
 void export_metadata_txt(char *devpath, char *storagepath);
@@ -206,6 +206,9 @@ void smtfs_setup();
 void smtfs_load();
 
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
+
+//smtfs_refresh.c
+void* refresh_cache(void* arg);
 
 //cp.c
 int cp(const char *to, const char *from);

@@ -207,7 +207,9 @@ void write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
     }
 }
 
-void append_dir_contents(ino_t dirino, ino_t fileino) {
+int append_dir_contents(ino_t dirino, ino_t fileino) {
+
+    int res = -1;
     char *filepath = get_ino_path(config.storage, dirino);
 
     if (filepath) {
@@ -218,7 +220,7 @@ void append_dir_contents(ino_t dirino, ino_t fileino) {
             int length = snprintf(NULL, 0, "%ld\n", fileino);
             char *strino = malloc(length+1);
             sprintf(strino, "%ld\n", fileino);
-            write(newfd, strino, length);
+            res = write(newfd, strino, length);
             free(strino);
             close(newfd);
         } else {
@@ -226,6 +228,8 @@ void append_dir_contents(ino_t dirino, ino_t fileino) {
         }
         free(filepath);
     }
+
+    return res;
 }
 
 void remove_xattr_from_dir(char* dirpath) {
