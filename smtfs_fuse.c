@@ -1,13 +1,15 @@
 #include "smtfs.h"
 #include <errno.h>
+#include <limits.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <sys/sysmacros.h>
-#include <limits.h>
 
 static void smt_destroy(void *userdata);
 struct smtfs_config config;
+pthread_t refresh_thread;
 
 void fatal_error(const char *message) {
     puts(message);
@@ -575,6 +577,8 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     add_opendir(ROOT);
     //!add_opendir(HOME);
     refreshdir(NULL, NULL, ROOT, 0);
+
+    pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
 }
 
 void copy_to_backup(char* name) {
@@ -592,10 +596,14 @@ static void smt_destroy(void *userdata) {
     printf("smt_destroy: Shutting down...\n");
     int ok = 1;
 
+    pthread_detach(refresh_thread);
+    pthread_cancel(refresh_thread);
+
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
             remove_opendir(kh_key(opendirh, k));
         }
+
     kh_destroy(opendirhash, opendirh);
     free(lvisit.visits);
 
@@ -943,6 +951,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
+        time(&lvisit.visits[opendir->index].visit);
 
         int pos = find_fname_pos(opendir->filenames, (char *)name);
         if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
@@ -1137,6 +1146,7 @@ static void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
     khint_t k = add_opendir(ino);
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
+        time(&lvisit.visits[opendir->index].visit);
         ++opendir->openref;
 
         fuse_reply_open(req, fi);
@@ -1262,6 +1272,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
 
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
+        time(&lvisit.visits[opendir->index].visit);
 
         int pos = find_fname_pos(opendir->filenames, (char *)name);
 
@@ -1480,6 +1491,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
     k = add_opendir(parent);
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
+        time(&lvisit.visits[opendir->index].visit);
 
         int pos = find_fname_pos(opendir->filenames, (char *)name);
 
@@ -1521,6 +1533,7 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
     k = add_opendir(parent);
     if (k != kh_end(opendirh)) {
         struct opendirinfo *dir = kh_value(opendirh, k);
+        time(&lvisit.visits[dir->index].visit);
 
         int pos = find_fname_pos(dir->filenames, (char *)name);
 

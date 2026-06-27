@@ -683,7 +683,7 @@ khint_t add_opendir(ino_t ino) {
                 if (dir) {
                     dir->openref = 0;
                     dir->index = lvisit.currindex++;
-                    time(&lvisit.visits[dir->index].visit);
+                    lvisit.visits[dir->index].visit = 0;
                     lvisit.visits[dir->index].ino = ino;
 
                     dir->fileinos = malloc(sizeof(struct inoarr));
