@@ -21,8 +21,8 @@ void smtfs_setup() {
 
     freemap = malloc(sizeof(struct freeino));
     freemap->ino = 1; //init to 1
-    freemap->used = 0;
     freemap->nextfr = NULL;
+    config.used = 0;
 
     for (int i = 0; i <= 99; i++) {
         char *filepath = malloc(PATH_MAX);
@@ -75,7 +75,7 @@ void smtfs_load() {
             ino_t ino;
             struct freeino *prev = malloc(sizeof(struct freeino));
 
-            fscanf(fptr, "%lu\n", &prev->used);
+            fscanf(fptr, "%lu\n", &config.used);
             fscanf(fptr, "%lu\n", &prev->ino); //first inode guaranteed
             freemap = prev;
 
@@ -578,7 +578,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     //!add_opendir(HOME);
     refreshdir(NULL, NULL, ROOT, 0);
 
-    pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
+    //pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
 }
 
 void copy_to_backup(char* name) {
@@ -596,12 +596,12 @@ static void smt_destroy(void *userdata) {
     printf("smt_destroy: Shutting down...\n");
     int ok = 1;
 
-    pthread_detach(refresh_thread);
-    pthread_cancel(refresh_thread);
+    //pthread_detach(refresh_thread);
+    //pthread_cancel(refresh_thread);
 
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
-            remove_opendir(kh_key(opendirh, k));
+            remove_opendir(kh_key(opendirh, k), STOP);
         }
 
     kh_destroy(opendirhash, opendirh);
@@ -654,9 +654,9 @@ static void smt_destroy(void *userdata) {
             int length;
             char *strino;
 
-            length = snprintf(NULL, 0, "%ld\n", freemap->used);
+            length = snprintf(NULL, 0, "%ld\n", config.used);
             strino = malloc(length+1);
-            sprintf(strino, "%ld\n", freemap->used);
+            sprintf(strino, "%ld\n", config.used);
             write(newfd, strino, length);
             free(strino);
 
@@ -859,6 +859,7 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         time(&lvisit.visits[opendir->index].visit);
 
+        //clear old filenames
         for (int i = 0; i < opendir->filenames->size; i++) {
             free(opendir->filenames->entries[i].name);
         }
@@ -868,73 +869,84 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
         opendir->filenames->size = 0;
         opendir->filenames->exp = 2;
 
+        //load filenames into filenamehash to look for duplicates
         for (int i = 0; i < opendir->fileinos->size; i++) {
+            char *name = NULL;
+
             k = kh_get(openfilehash, fcache, opendir->fileinos->inos[i]);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
-                k1 = kh_get(filenamehash, fnh, f->name);
+                name = strdup(f->name);
+            } else {
+                name = (char *)get_xattr_from_file(opendir->fileinos->inos[i], "user.smtfs_m.name");
+            }
+
+            if (name) {
+                k1 = kh_get(filenamehash, fnh, name);
                 if (k1 != kh_end(fnh)) {
-                    kh_value(fnh, k1) = 1;
+                    struct freeino *node = malloc(sizeof(struct freeino));
+                    node->ino = opendir->fileinos->inos[i];
+                    node->nextfr = NULL;
+                    struct freeino *prev = kh_value(fnh, k1);
+                    prev->nextfr = node;
+                    free(name);
                 } else {
-                    k1 = kh_put(filenamehash, fnh, f->name, &absent);
-                    kh_value(fnh, k1) = 0;
+                    k1 = kh_put(filenamehash, fnh, name, &absent);
+                    struct freeino *node = malloc(sizeof(struct freeino));
+                    node->ino = opendir->fileinos->inos[i];
+                    node->nextfr = NULL;
+                    kh_value(fnh, k1) = node;
+                    kh_key(fnh, k1) = name;
                 }
+
+            } else {
+                printf("refreshdir: failed to load filename for inode %ld\n", opendir->fileinos->inos[i]);
             }
         }
 
-        int p = 0;
-        for (int i = 0; i < opendir->fileinos->size; i++) {
-            struct opendirentry *fin;
+        //generate new filenames
+        for (k = 0; k < kh_end(fnh); ++k) {
+            if (kh_exist(fnh, k)) {
+                struct freeino *node = kh_value(fnh, k);
+                char *name = (char*)kh_key(fnh, k);
 
-            k = kh_get(openfilehash, fcache, opendir->fileinos->inos[i]);
-            if (k != kh_end(fcache)) {
-                struct openfileinfo *f = kh_value(fcache, k);
+                if (node->nextfr) {
+                    struct freeino *prev = NULL;
+                    while (node) {
+                        char *newname;
+                        int length = snprintf(NULL, 0, "%ld", node->ino);
+                        char app[length+1];
+                        if ((newname = malloc(strlen(name) + length + 2)) != NULL) {
+                            newname[0] = '\0';
+                            sprintf(app, "%ld", node->ino);
+                            strcat(newname, name);
+                            strcat(newname, ":");
+                            strcat(newname, app);
 
-                k1 = kh_get(filenamehash, fnh, f->name);
-                if (kh_value(fnh, k1) == 1) {
-                    char *name;
-                    int length = snprintf(NULL, 0, "%ld", f->ino);
-                    char app[length+1];
-                    if ((name = malloc(strlen(f->name) + length + 2)) != NULL) {
-                        name[0] = '\0';
-                        sprintf(app, "%ld", f->ino);
-                        strcat(name, f->name);
-                        strcat(name, ":");
-                        strcat(name, app);
+                            insert_fname(opendir->filenames, newname, node->ino);
 
-                        fin = calloc(1, sizeof(struct opendirentry));
-                        fin->ino = f->ino;
-                        fin->name = (char*)malloc(MAXNAMLEN);
-                        if (!fin->name) {
-                            printf("refreshdir: filename malloc fail -> %ld\n", f->ino);
+                            if (addbuff) {
+                                dirbuf_add(req, b, newname, node->ino);
+                            }
+                        } else {
+                            printf("refreshdir: filename malloc fail for inode %ld\n", node->ino);
                             continue;
                         }
-                        strncpy(fin->name, name, strlen(name));
-                        fin->name[strlen(name)] = '\0';
-                        insert_fname(opendir->filenames, fin->name, fin->ino);
-                        free(name);
-                    } else {
-                        printf("refreshdir: filename malloc fail -> %ld\n", f->ino);
-                        continue;
-                    }
-                } else {
-                    fin = calloc(1, sizeof(struct opendirentry));
-                    fin->ino = f->ino;
-                    fin->name = (char*)malloc(MAXNAMLEN);
-                    if (!fin->name) {
-                        printf("refreshdir: filename malloc fail -> %ld\n", f->ino);
-                        continue;
-                    }
-                    strncpy(fin->name, f->name, strlen(f->name));
-                    fin->name[strlen(f->name)] = '\0';
-                    insert_fname(opendir->filenames, fin->name, fin->ino);
-                }
 
-                if (addbuff) {
-                    dirbuf_add(req, b, fin->name, fin->ino);
+                        prev = node;
+                        node = node->nextfr;
+                        free(prev);
+                    }
+                    free(name);
+                } else {
+                    insert_fname(opendir->filenames, name, node->ino);
+
+                    if (addbuff) {
+                        dirbuf_add(req, b, name, node->ino);
+                    }
+
+                    free(node);
                 }
-                free(fin);
-                p++;
             }
         }
 
@@ -947,15 +959,15 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     memset(&e, 0, sizeof(e));
     struct openfileinfo *f = NULL;
     khint_t k;
-    k = add_opendir(parent);
 
+    k = add_opendir(parent);
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         time(&lvisit.visits[opendir->index].visit);
 
         int pos = find_fname_pos(opendir->filenames, (char *)name);
         if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
-            k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
+            k = add_openfile(opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 f = kh_value(fcache, k);
             }
@@ -1633,7 +1645,7 @@ static void smt_statfs(fuse_req_t req, fuse_ino_t ino) {
 
 	res = fstatvfs(config.root_fd, &stbuf);
 	stbuf.f_files = MAX_FILES;
-	stbuf.f_ffree = stbuf.f_favail = MAX_FILES-freemap->used;
+	stbuf.f_ffree = stbuf.f_favail = MAX_FILES-config.used;
 	if (res == -1)
 		fuse_reply_err(req, errno);
 	else

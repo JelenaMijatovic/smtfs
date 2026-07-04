@@ -22,9 +22,12 @@
 #define MAX_OPEN 50
 #define MAX_FILENAME 256
 #define DIRSPLIT 10000
+#define REFRESH_PERIOD 300
 
 #define ADD 1
 #define RMV 0
+#define RUNNING 1
+#define STOP 0
 
 #define ROOT 1
 #define ROOT_FN "/"
@@ -59,6 +62,7 @@ struct smtfs_config {
     int root_fd;
     dev_t dev;
     blksize_t blksize;
+    ino_t used; //used inode count
     char *devfile;
     char *storage;
     char *backup;
@@ -69,7 +73,6 @@ extern struct smtfs_config config;
 //freemap
 struct freeino {
     ino_t ino; //first free inode
-    ino_t used; //used inode count
     struct freeino *nextfr; //free inode list
 };
 
@@ -132,7 +135,7 @@ struct opendirinfo {
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
 extern khash_t(opendirhash) *opendirh;
 
-KHASH_MAP_INIT_STR(filenamehash, int)
+KHASH_MAP_INIT_STR(filenamehash, struct freeino*)
 
 //cache replacement
 struct vst {
@@ -176,7 +179,7 @@ khint_t add_openfile(ino_t ino);
 void remove_openfile(ino_t ino);
 
 khint_t add_opendir(ino_t ino);
-void remove_opendir(ino_t ino);
+void remove_opendir(ino_t ino, int sys_running);
 
 ino_t dirset(const char *name, const char *pos);
 
@@ -208,7 +211,7 @@ void smtfs_load();
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 
 //smtfs_refresh.c
-void* refresh_cache(void* arg);
+//void* refresh_cache(void* arg);
 
 //cp.c
 int cp(const char *to, const char *from);

@@ -211,7 +211,7 @@ void remove_directory(const char *name) {
             remove_filefromdir(name, opendir->fileinos->inos[0]);
         }
 
-        remove_opendir(dir->ino);
+        remove_opendir(dir->ino, RUNNING);
         kh_del(dirhash, dirh, k);
         free(dir->name);
         free(dir);
@@ -377,7 +377,7 @@ int add_sysdirs(const char *name, mode_t mode) {
             }
 
             ino_t ino = freemap->ino;
-            ++freemap->used;
+            ++config.used;
             if (freemap->nextfr) {
                 struct freeino *t = freemap;
                 freemap = freemap->nextfr;
@@ -460,7 +460,7 @@ ino_t add_file(const char *name, mode_t mode, off_t size) {
             }
 
             ino_t ino = freemap->ino;
-            ++freemap->used;
+            ++config.used;
             if (freemap->nextfr) {
                 struct freeino *t = freemap;
                 freemap = freemap->nextfr;
@@ -509,7 +509,7 @@ void remove_file(ino_t ino) {
 
     struct freeino *newino = calloc(1, sizeof(struct freeino));
     newino->ino = ino;
-    --freemap->used;
+    --config.used;
     if (ino < freemap->ino) {
         newino->nextfr = freemap;
         freemap = newino;
@@ -676,7 +676,7 @@ khint_t add_opendir(ino_t ino) {
                     if (i > MAX_OPEN-1) { //all dirs are open
                         return kh_end(opendirh);
                     }
-                    remove_opendir(t.ino);
+                    remove_opendir(t.ino, RUNNING);
                 }
 
                 struct opendirinfo *dir = malloc(sizeof(struct opendirinfo));
@@ -719,17 +719,18 @@ khint_t add_opendir(ino_t ino) {
                         fatal_error("add_opendir: Couldn't allocate memory\n");
                     }
 
-                    if (ino != FILES && ino != TAGS) { //!load up to MAX_DIRSIZE
-                        khint_t k1;
-                        for (int i = 0; i < dir->fileinos->size; i++) {
-                            k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
-                            if (k1 == kh_end(fcache)) {
-                                add_openfile(dir->fileinos->inos[i]);
-                                k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
-                            }
-                            struct openfileinfo *f = kh_value(fcache, k1);
-                            f->nref++;
+                    khint_t k1;
+                    for (int i = 0; i < dir->fileinos->size; i++) {
+                        if (i >= MAX_DIRSIZE) {
+                            break;
                         }
+                        k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
+                        if (k1 == kh_end(fcache)) {
+                            add_openfile(dir->fileinos->inos[i]);
+                            k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
+                        }
+                        struct openfileinfo *f = kh_value(fcache, k1);
+                        f->nref++;
                     }
 
                     k = kh_put(opendirhash, opendirh, ino, &absent);
@@ -745,7 +746,7 @@ khint_t add_opendir(ino_t ino) {
     return kh_end(opendirh);
 }
 
-void remove_opendir(ino_t ino) {
+void remove_opendir(ino_t ino, int sys_running) {
 
     printf("remove_opendir: %ld\n", ino);
 
@@ -772,7 +773,9 @@ void remove_opendir(ino_t ino) {
         free(opendir->filenames);
         free(opendir);
 
-        kh_del(opendirhash, opendirh, ino);
+        if (sys_running) {
+            kh_del(opendirhash, opendirh, ino);
+        }
     }
 }
 
