@@ -17,11 +17,11 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX_FILES 1000000
-#define MAX_DIRSIZE 100000
-#define MAX_OPEN 50
+#define MAX_FILES 1000000 //max files for an smtfs instance
+#define MAX_DIRSIZE 10000 //max files to load into cache preemptively per directory
+#define MAX_OPEN 50       //max directories with entries loaded in at a time
 #define MAX_FILENAME 256
-#define DIRSPLIT 10000
+#define DIRSPLIT 10000    //used in calculating storage path
 #define REFRESH_PERIOD 300
 
 #define ADD 1
@@ -95,7 +95,7 @@ struct inoarr {
 
 struct openfileinfo {
     ino_t ino;
-    int fd; //file handle
+    int fd; //file handle upon file creation for diagnostics
     char *name;
     off_t size;
     mode_t mode;
