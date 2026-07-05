@@ -260,7 +260,6 @@ int add_filetodir(const char *dirname, ino_t fileino) {
 
                 if (i) {
                     f->nlink++;
-                    f->nref++;
                     clock_gettime(CLOCK_REALTIME, &f->ctime);
                 } else {
                     return ENOMEM;
@@ -305,7 +304,6 @@ void remove_filefromdir(const char *dirname, ino_t fileino) {
                 i = remove_ino(f->dirinos, dir->ino);
                 if (i) {
                     f->nlink--;
-                    f->nref--;
                     clock_gettime(CLOCK_REALTIME, &f->ctime);
                 }
             }
@@ -622,7 +620,6 @@ void remove_openfile(ino_t ino) {
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_val(fcache, k);
 
-        f->nref--;
         if (f->nref < 1) {
             char *filepath = get_ino_path(config.storage, ino);
             if (filepath) {
@@ -698,8 +695,6 @@ khint_t add_opendir(ino_t ino) {
                     dir->filenames->size = 0;
                     dir->filenames->exp = 2;
 
-                    ++f->nref;
-
                     //load directory contents
                     char *filepath = get_ino_path(config.storage, ino);
                     if (filepath) {
@@ -727,10 +722,7 @@ khint_t add_opendir(ino_t ino) {
                         k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
                         if (k1 == kh_end(fcache)) {
                             add_openfile(dir->fileinos->inos[i]);
-                            k1 = kh_get(openfilehash, fcache, dir->fileinos->inos[i]);
                         }
-                        struct openfileinfo *f = kh_value(fcache, k1);
-                        f->nref++;
                     }
 
                     k = kh_put(opendirhash, opendirh, ino, &absent);

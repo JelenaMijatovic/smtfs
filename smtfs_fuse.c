@@ -1006,7 +1006,7 @@ static void smt_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
             remove_file(ino);
             fuse_reply_err(req, 0);
         } else {
-            if (!f->nref) {
+            if (f->nref < 1) {
                 remove_openfile(ino);
             }
             fuse_reply_err(req, EMLINK);
@@ -1037,10 +1037,6 @@ static void smt_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
         stbuf.st_ctim = f->ctime;
         stbuf.st_mtim = f->mtime;
         fuse_reply_attr(req, &stbuf, 1.0);
-
-        if (!f->nref) {
-            remove_openfile(ino);
-        }
     } else {
         fuse_reply_err(req, ENOENT);
     }
@@ -1097,10 +1093,6 @@ static void smt_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int t
         stbuf.st_ctim = f->ctime;
 
         fuse_reply_attr(req, &stbuf, 1.0);
-
-        if (!f->nref) {
-            remove_openfile(ino);
-        }
     } else {
         fuse_reply_err(req, ENOENT);
     }
@@ -1113,6 +1105,7 @@ static void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struc
     khint_t k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+
         stxbuf.stx_mask = STATX_BASIC_STATS | STATX_BTIME;
         stxbuf.stx_blksize = config.blksize;
         stxbuf.stx_nlink = f->nlink;
@@ -1135,10 +1128,6 @@ static void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struc
         stxbuf.stx_dev_minor = minor(config.dev);
 
         fuse_reply_statx(req, flags, &stxbuf, 1.0);
-
-        if (!f->nref) {
-            remove_openfile(ino);
-        }
     } else {
         fuse_reply_err(req, ENOENT);
     }
@@ -1229,10 +1218,6 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
                         add_filetodir(fp->name, ino);
                     }
 
-                    if (!fp->nref) {
-                        remove_openfile(parent);
-                    }
-
                     k = add_openfile(ino);
                     if (k != kh_end(fcache)) {
                         struct openfileinfo *f = kh_value(fcache, k);
@@ -1247,10 +1232,6 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
                             fuse_reply_entry(req, &e);
                         } else {
                             fuse_reply_err(req, f->fd);
-                        }
-
-                        if (!f->nref) {
-                            remove_openfile(ino);
                         }
                     } else {
                         fuse_reply_err(req, ENOENT);
@@ -1289,7 +1270,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
         int pos = find_fname_pos(opendir->filenames, (char *)name);
 
         if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
-            k = kh_get(openfilehash, fcache, opendir->filenames->entries[pos].ino);
+            k = add_openfile(opendir->filenames->entries[pos].ino);
             if (k != kh_end(fcache)) {
                 struct openfileinfo *f = kh_value(fcache, k);
                 struct dirinfo *olddir = NULL;
@@ -1397,10 +1378,6 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
                     } else {
                         fuse_reply_err(req, EBADF);
                     }
-
-                    if (!f->nref) {
-                        remove_openfile(ino);
-                    }
 				} else {
 					fuse_reply_err(req, ENOENT);
 				}
@@ -1411,9 +1388,6 @@ static void smt_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode
             fuse_reply_err(req, ENOSPC);
         }
 
-        if (!fp->nref) {
-            remove_openfile(parent);
-        }
         return;
     }
 
@@ -1441,6 +1415,7 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
 
                 fd = open(filepath, fi->flags | flag);
                 if (fd) {
+                    ++f->nref;
                     fi->fh = fd;
                     fuse_reply_open(req, fi);
                 } else {
@@ -1508,28 +1483,17 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
         int pos = find_fname_pos(opendir->filenames, (char *)name);
 
         if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
-            khint_t k = add_openfile(opendir->filenames->entries[pos].ino);
-            if (k != kh_end(fcache)) {
-                struct openfileinfo *f = kh_value(fcache, k);
-
+            if (parent == FILES) { //if unlinking from _FILES, unlink from everywhere and free file
+                remove_file(opendir->filenames->entries[pos].ino);
+                res = 0;
+            } else {
                 khint_t k = add_openfile(parent);
                 if (k != kh_end(fcache)) {
                     struct openfileinfo *fp = kh_value(fcache, k);
 
-                    remove_filefromdir(fp->name, f->ino);
-
-                    if (!fp->nref) {
-                        remove_openfile(parent);
-                    }
+                    remove_filefromdir(fp->name, opendir->filenames->entries[pos].ino);
+                    res = 0;
                 }
-
-                if (parent == FILES) { //if unlinking from _FILES, unlink from everywhere and free file
-                    remove_file(f->ino);
-                } else {
-                    clock_gettime(CLOCK_REALTIME, &f->ctime);
-                }
-
-                res = 0;
             }
         }
     }
@@ -1550,32 +1514,21 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
         int pos = find_fname_pos(dir->filenames, (char *)name);
 
         if (dir->filenames->entries[pos].name && !strcmp(dir->filenames->entries[pos].name, name)) {
-            k = add_openfile(dir->filenames->entries[pos].ino);
-            if (k != kh_end(fcache)) {
-                struct openfileinfo *f = kh_value(fcache, k);
+            if (dir->filenames->entries[pos].ino > SYSDIR) {
+                if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
+                    remove_file(dir->filenames->entries[pos].ino);
+                    res = 0;
+                } else { //else unlink only from current directory
+                    k = add_openfile(parent);
+                    if (k != kh_end(fcache)) {
+                        struct openfileinfo *fp = kh_value(fcache, k);
 
-                if (f->ino > SYSDIR) {
-                    if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
-                        remove_file(f->ino);
+                        remove_filefromdir(fp->name, dir->filenames->entries[pos].ino);
                         res = 0;
-                    } else { //else unlink only from current directory
-                        k = add_openfile(parent);
-                        if (k != kh_end(fcache)) {
-                            struct openfileinfo *fp = kh_value(fcache, k);
-
-                            remove_filefromdir(fp->name, f->ino);
-                            clock_gettime(CLOCK_REALTIME, &f->ctime);
-
-                            if (!fp->nref) {
-                                remove_openfile(parent);
-                            }
-
-                            res = 0;
-                        }
                     }
-                }  else {
-                    res = EPERM;
                 }
+            }  else {
+                res = EPERM;
             }
         }
     }
@@ -1627,10 +1580,8 @@ static void smt_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
     khint_t k = kh_get(openfilehash, fcache, ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
-        if (!f->nref) {
-            res = close(fi->fh);
-            remove_openfile(ino);
-        }
+        --f->nref;
+        res = close(fi->fh);
     } else {
         res = ENOENT;
     }
@@ -1640,12 +1591,12 @@ static void smt_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
 
 static void smt_statfs(fuse_req_t req, fuse_ino_t ino) {
 
-	int res;
 	struct statvfs stbuf;
 
-	res = fstatvfs(config.root_fd, &stbuf);
+	int res = fstatvfs(config.root_fd, &stbuf);
 	stbuf.f_files = MAX_FILES;
 	stbuf.f_ffree = stbuf.f_favail = MAX_FILES-config.used;
+
 	if (res == -1)
 		fuse_reply_err(req, errno);
 	else
@@ -1661,48 +1612,44 @@ static void smt_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size) {
     khint_t k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         f = kh_value(fcache, k);
-    }
 
-    if (size) {
-        value = (char *)malloc(size);
-        if (!value) {
-            fuse_reply_err(req, ENOMEM);
-            return;
-        }
-        char *p = value;
-
-        for (int i = 0; i < f->dirinos->size; i++) {
-            k = kh_get(openfilehash, fcache, f->dirinos->inos[i]);
-            if (k != kh_end(fcache)) {
-                struct openfileinfo *fd = kh_value(fcache, k);
-                p = memccpy(p, fd->name, '\0', strlen(fd->name)+1);
-            } else {
-                char *dirname = get_xattr_from_file(f->dirinos->inos[i], "user.smtfs_m.name");
-                p = memccpy(p, dirname, '\0', strlen(dirname)+1);
-                free(dirname);
+        if (size) {
+            value = (char *)malloc(size);
+            if (!value) {
+                fuse_reply_err(req, ENOMEM);
+                return;
             }
-        }
+            char *p = value;
 
-		fuse_reply_buf(req, value, size);
-    } else {
-        for (int i = 0; i < f->dirinos->size; i++) {
-            k = kh_get(openfilehash, fcache, f->dirinos->inos[i]);
-            if (k != kh_end(fcache)) {
-                struct openfileinfo *fd = kh_value(fcache, k);
-                ret += strlen(fd->name)+1;
-            } else {
-                char *dirname = get_xattr_from_file(f->dirinos->inos[i], "user.smtfs_m.name");
-                ret += strlen(dirname)+1;
-                free(dirname);
+            for (int i = 0; i < f->dirinos->size; i++) {
+                k = kh_get(openfilehash, fcache, f->dirinos->inos[i]);
+                if (k != kh_end(fcache)) {
+                    struct openfileinfo *fd = kh_value(fcache, k);
+                    p = memccpy(p, fd->name, '\0', strlen(fd->name)+1);
+                } else {
+                    char *dirname = get_xattr_from_file(f->dirinos->inos[i], "user.smtfs_m.name");
+                    p = memccpy(p, dirname, '\0', strlen(dirname)+1);
+                    free(dirname);
+                }
             }
+
+            fuse_reply_buf(req, value, size);
+        } else {
+            for (int i = 0; i < f->dirinos->size; i++) {
+                k = kh_get(openfilehash, fcache, f->dirinos->inos[i]);
+                if (k != kh_end(fcache)) {
+                    struct openfileinfo *fd = kh_value(fcache, k);
+                    ret += strlen(fd->name)+1;
+                } else {
+                    char *dirname = get_xattr_from_file(f->dirinos->inos[i], "user.smtfs_m.name");
+                    ret += strlen(dirname)+1;
+                    free(dirname);
+                }
+            }
+
+            fuse_reply_xattr(req, ret);
         }
-
-		fuse_reply_xattr(req, ret);
-    }
-    free(value);
-
-    if (!f->nref) {
-        remove_openfile(ino);
+        free(value);
     }
 }
 
@@ -1733,21 +1680,50 @@ int recursive_dir(ino_t dirino, ino_t ino) {
 
     int saverr = 0;
 
-    khint_t k = add_openfile(dirino);
+    khint_t k = kh_get(openfilehash, fcache, dirino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+
         for (int i = 0; i < f->dirinos->size; i++) {
-            ino_t inod = f->dirinos->inos[i];
-            saverr = recursive_dir(inod, ino);
+            saverr = recursive_dir(f->dirinos->inos[i], ino);
             if (saverr) {
-                if (!f->nref) {
-                    remove_openfile(dirino);
-                }
                 return saverr;
             }
         }
-        if (!f->nref) {
-            remove_openfile(dirino);
+    } else {
+        char *filepath = get_ino_path(config.storage, dirino);
+        if (filepath) {
+            int size = listxattr(filepath, 0, 0);
+            if (size <= 0) {
+                free(filepath);
+                filepath = get_ino_path(config.backup, ino);
+                size = listxattr(filepath, 0, 0);
+            }
+            if (size > 0) {
+                char* list = malloc(size);
+                if (list) {
+                    listxattr(filepath, list, size);
+                    int sum = 0;
+                    char *s = list;
+                    char *p;
+                    while (sum < size) {
+                        sum += strlen(s)+1;
+                        p = strstr(s, "user.smtfs.");
+                        if (p) {
+                            p = p + strlen("user.smtfs.");
+                            khint_t k = kh_get(dirhash, dirh, p);
+                            if (k != kh_end(dirh)) {
+                                struct dirinfo *dir = kh_val(dirh, k);
+                                recursive_dir(dir->ino, ino);
+                            }
+                        }
+                        s = strchr(s, '\0');
+                        s++;
+                    }
+                }
+                free(list);
+            }
+            free(filepath);
         }
     }
 
@@ -1776,6 +1752,7 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
         k = add_openfile(ino);
         if (k != kh_end(fcache)) {
             struct openfileinfo *f = kh_value(fcache, k);
+
             if ((f->mode & S_IFMT) != S_IFDIR && dir->ino == TAGS) {
                 fuse_reply_err(req, saverr);
                 return;
@@ -1794,11 +1771,8 @@ static void smt_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name, const
                     return;
                 }
             }
-            saverr = add_filetodir(name, ino);
 
-            if (!f->nref) {
-                remove_openfile(ino);
-            }
+            saverr = add_filetodir(name, ino);
         }
     } else {
         saverr = add_file(name, S_IFDIR | 0777, config.blksize);
@@ -1833,9 +1807,6 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
             if (f->dirinos->inos[pos] == dir->ino) { //check if present
                 remove_filefromdir(name, ino);
                 saverr = 0;
-            }
-            if (!f->nref) {
-                remove_openfile(ino);
             }
         }
     }
