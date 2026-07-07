@@ -174,7 +174,7 @@ void remove_filefromdir(const char *dirname, ino_t fileino);
 int add_sysdirs(const char *name, mode_t mode);
 
 ino_t add_file(const char *name, mode_t mode, off_t size);
-void remove_file(ino_t ino);
+int remove_file(ino_t ino);
 khint_t add_openfile(ino_t ino);
 void remove_openfile(ino_t ino);
 

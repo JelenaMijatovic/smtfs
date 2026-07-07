@@ -1003,12 +1003,9 @@ static void smt_forget(fuse_req_t req, fuse_ino_t ino, uint64_t nlookup) {
         struct openfileinfo *f = kh_value(fcache, k);
 
         if (f->nlink == 0 || ((f->mode & S_IFMT) == S_IFDIR && f->nlink == 1)) { //check if nothing else links to the file
-            remove_file(ino);
-            fuse_reply_err(req, 0);
+            int res = remove_file(ino);
+            fuse_reply_err(req, res);
         } else {
-            if (f->nref < 1) {
-                remove_openfile(ino);
-            }
             fuse_reply_err(req, EMLINK);
         }
     } else {
@@ -1484,8 +1481,7 @@ static void smt_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
 
         if (opendir->filenames->entries[pos].name && !strcmp(opendir->filenames->entries[pos].name, name)) {
             if (parent == FILES) { //if unlinking from _FILES, unlink from everywhere and free file
-                remove_file(opendir->filenames->entries[pos].ino);
-                res = 0;
+                res = remove_file(opendir->filenames->entries[pos].ino);
             } else {
                 khint_t k = add_openfile(parent);
                 if (k != kh_end(fcache)) {
@@ -1516,8 +1512,7 @@ static void smt_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name) {
         if (dir->filenames->entries[pos].name && !strcmp(dir->filenames->entries[pos].name, name)) {
             if (dir->filenames->entries[pos].ino > SYSDIR) {
                 if (parent == TAGS) { //if unlinking from /, unlink from everywhere and free file
-                    remove_file(dir->filenames->entries[pos].ino);
-                    res = 0;
+                    res = remove_file(dir->filenames->entries[pos].ino);
                 } else { //else unlink only from current directory
                     k = add_openfile(parent);
                     if (k != kh_end(fcache)) {

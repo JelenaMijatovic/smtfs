@@ -473,12 +473,16 @@ ino_t add_file(const char *name, mode_t mode, off_t size) {
     return 0;
 }
 
-void remove_file(ino_t ino) {
+int remove_file(ino_t ino) {
     khint_t k, k1;
 
     k = add_openfile(ino);
     if (k != kh_end(fcache)) {
         struct openfileinfo *f = kh_value(fcache, k);
+
+        if (f->nref > 0) {
+            return EBUSY;
+        }
 
         while (f->dirinos->size) {
             k1 = add_openfile(f->dirinos->inos[0]);
@@ -519,6 +523,8 @@ void remove_file(ino_t ino) {
         newino->nextfr = curr->nextfr;
         curr->nextfr = newino;
     }
+
+    return 0;
 }
 
 khint_t add_openfile(ino_t ino) {
@@ -754,7 +760,6 @@ void remove_opendir(ino_t ino, int sys_running) {
         for (int i = 0; i < opendir->fileinos->size; i++) {
             remove_openfile(opendir->fileinos->inos[i]);
         }
-        remove_openfile(ino);
 
         free(opendir->fileinos->inos);
         free(opendir->fileinos);
