@@ -8,6 +8,7 @@
 #include <sys/sysmacros.h>
 
 static void smt_destroy(void *userdata);
+int recursive_dir(ino_t dirino, ino_t ino);
 struct smtfs_config config;
 pthread_t refresh_thread;
 
@@ -578,7 +579,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     //!add_opendir(HOME);
     refreshdir(NULL, NULL, ROOT, 0);
 
-    //pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
+    pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
 }
 
 void copy_to_backup(char* name) {
@@ -596,8 +597,8 @@ static void smt_destroy(void *userdata) {
     printf("smt_destroy: Shutting down...\n");
     int ok = 1;
 
-    //pthread_detach(refresh_thread);
-    //pthread_cancel(refresh_thread);
+    pthread_detach(refresh_thread);
+    pthread_cancel(refresh_thread);
 
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
@@ -1326,6 +1327,14 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                 }
 
                 if (parent != newparent) {
+                    if ((f->mode & S_IFMT) == S_IFDIR) {
+                        res = recursive_dir(newparent, f->ino); //check for A->..->A circular relation
+                        if (res) {
+                            fuse_reply_err(req, res);
+                            return;
+                        }
+                    }
+
                     k = kh_get(openfilehash, fcache, newparent);
                     if (k != kh_end(fcache)) {
                         struct openfileinfo *fp = kh_value(fcache, k);
@@ -1670,7 +1679,7 @@ static void smt_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name, size_
 
 int recursive_dir(ino_t dirino, ino_t ino) {
     if (dirino == ino) {
-        return EPERM;
+        return ELOOP;
     }
 
     int saverr = 0;

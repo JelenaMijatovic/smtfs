@@ -109,6 +109,7 @@ struct openfileinfo {
     struct timespec btime;
     struct inoarr *dirinos; //inodes of tags
     int nref;
+    time_t visit;
 };
 
 KHASH_MAP_INIT_INT(openfilehash, struct openfileinfo*)
@@ -176,7 +177,7 @@ int add_sysdirs(const char *name, mode_t mode);
 ino_t add_file(const char *name, mode_t mode, off_t size);
 int remove_file(ino_t ino);
 khint_t add_openfile(ino_t ino);
-void remove_openfile(ino_t ino);
+void remove_openfile(ino_t ino, khint_t k);
 
 khint_t add_opendir(ino_t ino);
 void remove_opendir(ino_t ino, int sys_running);
@@ -211,7 +212,7 @@ void smtfs_load();
 void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
 
 //smtfs_refresh.c
-//void* refresh_cache(void* arg);
+void* refresh_cache(void* arg);
 
 //cp.c
 int cp(const char *to, const char *from);
