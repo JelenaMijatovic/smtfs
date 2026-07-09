@@ -536,7 +536,7 @@ khint_t add_openfile(ino_t ino) {
         return k;
     }
 
-    printf("add_openfile: %ld\n", ino);
+    //printf("add_openfile: %ld\n", ino);
 
     struct openfileinfo *f = malloc(sizeof(struct openfileinfo));
     f->ino = ino;
@@ -623,7 +623,7 @@ khint_t add_openfile(ino_t ino) {
 
 void remove_openfile(ino_t ino, khint_t k) {
 
-    printf("remove_openfile: %ld\n", ino);
+    //printf("remove_openfile: %ld\n", ino);
     struct openfileinfo *f = NULL;
 
     if (k == kh_end(fcache)) {
@@ -671,7 +671,7 @@ khint_t add_opendir(ino_t ino) {
         if ((f->mode & S_IFMT) == S_IFDIR) {
             k = kh_get(opendirhash, opendirh, ino);
             if (k == kh_end(opendirh)) {
-                printf("add_opendir: %ld\n", ino);
+                //printf("add_opendir: %ld\n", ino);
 
                 if (kh_size(opendirh) >= MAX_OPEN) {
                     struct vst *visits = lvisit.visits;
@@ -754,7 +754,7 @@ khint_t add_opendir(ino_t ino) {
 
 void remove_opendir(ino_t ino, int sys_running) {
 
-    printf("remove_opendir: %ld\n", ino);
+    //printf("remove_opendir: %ld\n", ino);
 
     khint_t k;
 
