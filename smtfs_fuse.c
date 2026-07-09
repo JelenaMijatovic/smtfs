@@ -1133,8 +1133,10 @@ static void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struc
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
 
-    if (off < maxsize) {
-        return fuse_reply_buf(req, buf, min(bufsize, maxsize));
+    printf("reply_buf_limited %ld %ld %ld\n", bufsize, off, maxsize);
+
+    if (off < bufsize) {
+        return fuse_reply_buf(req, buf, min(bufsize, maxsize)-off);
     } else {
         return fuse_reply_buf(req, NULL, 0);
     }
@@ -1174,7 +1176,7 @@ static void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
         }
     }
 
-    reply_buf_limited(req, b.p, b.size, off, b.size);
+    reply_buf_limited(req, b.p+off, b.size, off, size);
     free(b.p);
 }
 
