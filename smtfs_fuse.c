@@ -577,7 +577,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
 
     add_opendir(ROOT);
     //!add_opendir(HOME);
-    refreshdir(NULL, NULL, ROOT, 0);
+    refreshdir(NULL, NULL, ROOT);
 
     pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
 }
@@ -822,19 +822,7 @@ static void smt_access(fuse_req_t req, fuse_ino_t ino, int mask) {
     fuse_reply_err(req, ENOSYS);
 }
 
-static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino)
-{
-	struct stat stbuf;
-	off_t oldsize = b->size;
-
-	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-	b->p = (char *) realloc(b->p, b->size);
-	memset(&stbuf, 0, sizeof(stbuf));
-	stbuf.st_ino = ino;
-	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, b->size);
-}
-
-void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
+void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino) {
 
     struct openfileinfo *f = NULL;
     struct dirinfo *dir = NULL;
@@ -926,9 +914,6 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
 
                             insert_fname(opendir->filenames, newname, node->ino);
 
-                            if (addbuff) {
-                                dirbuf_add(req, b, newname, node->ino);
-                            }
                         } else {
                             printf("refreshdir: filename malloc fail for inode %ld\n", node->ino);
                             continue;
@@ -941,10 +926,6 @@ void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff) {
                     free(name);
                 } else {
                     insert_fname(opendir->filenames, name, node->ino);
-
-                    if (addbuff) {
-                        dirbuf_add(req, b, name, node->ino);
-                    }
 
                     free(node);
                 }
@@ -988,7 +969,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
         e.entry_timeout = 10.0;
 
         if ((f->mode & S_IFMT) == S_IFDIR) {
-            refreshdir(req, NULL, f->ino, 0); //!called both on cd and ls
+            refreshdir(req, NULL, f->ino); //!called both on cd and ls
         }
 
         fuse_reply_entry(req, &e);
@@ -1131,17 +1112,6 @@ static void smt_statx(fuse_req_t req, fuse_ino_t ino, int flags, int mask, struc
     }
 }
 
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
-
-    printf("reply_buf_limited %ld %ld %ld\n", bufsize, off, maxsize);
-
-    if (off < bufsize) {
-        return fuse_reply_buf(req, buf, min(bufsize, maxsize)-off);
-    } else {
-        return fuse_reply_buf(req, NULL, 0);
-    }
-}
-
 static void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
 
     khint_t k = add_opendir(ino);
@@ -1153,6 +1123,30 @@ static void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
         fuse_reply_open(req, fi);
     } else {
         fuse_reply_err(req, ENOENT);
+    }
+}
+
+static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino)
+{
+	struct stat stbuf;
+	off_t oldsize = b->size;
+
+	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
+	b->p = (char *) realloc(b->p, b->size);
+	memset(&stbuf, 0, sizeof(stbuf));
+	stbuf.st_ino = ino;
+	//stbuf.st_mode
+	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, b->size);
+}
+
+static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
+
+    printf("reply_buf_limited %ld %ld %ld\n", bufsize, off, maxsize);
+
+    if (off < bufsize) {
+        return fuse_reply_buf(req, buf, min(bufsize, maxsize)-off);
+    } else {
+        return fuse_reply_buf(req, NULL, 0);
     }
 }
 
@@ -1317,7 +1311,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     for (int i = 0; i < f->dirinos->size; i++) {
                         k = kh_get(opendirhash, opendirh, f->dirinos->inos[i]);
                         if (k != kh_end(opendirh)) {
-                            refreshdir(NULL, NULL, f->dirinos->inos[i], 0);
+                            refreshdir(NULL, NULL, f->dirinos->inos[i]);
                         }
                     }
 

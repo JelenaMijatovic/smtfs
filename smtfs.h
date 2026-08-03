@@ -129,6 +129,7 @@ struct strarr {
 struct opendirinfo {
     int openref; //non-zero if there are open handles
     int index; //index of own entry in visits
+    int off; //offset used during subsequent readdir calls
     struct inoarr *fileinos; //inodes of contained files
     struct strarr *filenames; //filenames of contained files with modifications for duplicates
 };
@@ -209,7 +210,7 @@ void fatal_error(const char *message);
 void smtfs_setup();
 void smtfs_load();
 
-void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino, int addbuff);
+void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino);
 
 //smtfs_refresh.c
 void* refresh_cache(void* arg);
