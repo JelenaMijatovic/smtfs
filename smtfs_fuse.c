@@ -1126,52 +1126,115 @@ static void smt_opendir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *f
     }
 }
 
-static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name, fuse_ino_t ino)
-{
+//add direntry to dirbuf
+//return new real size on success, 0 on fail
+static off_t dirbuf_add(fuse_req_t req, struct dirbuf *b, off_t realsize, const char *name, fuse_ino_t ino) {
 	struct stat stbuf;
-	off_t oldsize = b->size;
+	off_t oldsize = realsize;
 
-	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-	b->p = (char *) realloc(b->p, b->size);
+	//abort if larger than max size
+	realsize += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
+	if (realsize > b->size) {
+        return 0;
+	}
+
+	//only ino and mode attributes are used by fuse_add_direntry
 	memset(&stbuf, 0, sizeof(stbuf));
+
 	stbuf.st_ino = ino;
-	//stbuf.st_mode
-	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, b->size);
-}
 
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize, off_t off, size_t maxsize) {
-
-    printf("reply_buf_limited %ld %ld %ld\n", bufsize, off, maxsize);
-
-    if (off < bufsize) {
-        return fuse_reply_buf(req, buf, min(bufsize, maxsize)-off);
-    } else {
-        return fuse_reply_buf(req, NULL, 0);
+	khint_t k = kh_get(openfilehash, fcache, ino);
+    if (k != kh_end(fcache)) {
+        struct openfileinfo *f = kh_value(fcache, k);
+        stbuf.st_mode = f->mode;
     }
+
+    //use current inode as offset
+	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf, ino);
+
+	return realsize;
 }
 
 static void smt_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
 
-    (void)fi;
-    struct dirbuf b;
-
-    memset(&b, 0, sizeof(b));
-
-    dirbuf_add(req, &b, ".", ino);
-    dirbuf_add(req, &b, "..", ino);
+    //empty directories will set offset to their own inodes on next call, send empty buffer (end of stream)
+    if (ino == off) {
+        fuse_reply_buf(req, NULL, 0);
+        return;
+    }
 
     khint_t k = add_opendir(ino);
     if (k != kh_end(opendirh)) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
 
         time(&lvisit.visits[opendir->index].visit);
-        for (int i = 0; i < opendir->filenames->size; i++) {
-            dirbuf_add(req, &b, opendir->filenames->entries[i].name, opendir->filenames->entries[i].ino);
+
+        //if offset is set, find the index of the last added file in opendir->filenames and continue from there
+        int pos;
+        if (off) {
+            k = add_openfile(off);
+            if (k != kh_end(fcache)) {
+                struct openfileinfo *f = kh_val(fcache, k);
+
+                //iterate through identical names until the inode set in offset is found
+                pos = find_fname_pos(opendir->filenames, f->name);
+                while (strncmp(opendir->filenames->entries[pos].name, f->name, strlen(f->name))) {
+                    if (opendir->filenames->entries[pos].ino == off) {
+                        break;
+                    }
+                    ++pos;
+                }
+                //inode not found
+                if (opendir->filenames->entries[pos].ino != off) {
+                    fuse_reply_err(req, ENOENT);
+                    return;
+                }
+                //if pos is at last index or larger, send empty buffer (end of stream)
+                if (pos >= opendir->filenames->size-1) {
+                    fuse_reply_buf(req, NULL, 0);
+                    return;
+                }
+                ++pos; //move index to first new file
+            } else {
+                fuse_reply_err(req, ENOENT);
+                return;
+            }
+        } else {
+            pos = 0;
         }
+
+        (void)fi;
+        struct dirbuf b;
+        off_t realsize = 0;
+
+        //initialise buffer to maxsize
+        memset(&b, 0, sizeof(b));
+        b.size = size;
+        b.p = (char *)malloc(size);
+
+        //only include "." and ".." on first read
+        if (!off) {
+            realsize = dirbuf_add(req, &b, realsize, ".", ino);
+            realsize = dirbuf_add(req, &b, realsize, "..", ino);
+        }
+
+        //add direntries to buffer until it's full
+        off_t res;
+        for (int i = pos; i < opendir->filenames->size; i++) {
+            res = dirbuf_add(req, &b, realsize, opendir->filenames->entries[i].name, opendir->filenames->entries[i].ino);
+            if (res) {
+                realsize = res;
+            } else {
+                break;
+            }
+        }
+
+        fuse_reply_buf(req, b.p, min(realsize, size));
+        free(b.p);
+        return;
     }
 
-    reply_buf_limited(req, b.p+off, b.size, off, size);
-    free(b.p);
+    fuse_reply_err(req, ENOENT);
 }
 
 static void smt_releasedir(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
