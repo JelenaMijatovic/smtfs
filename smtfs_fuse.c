@@ -431,7 +431,7 @@ void refresh_imports() {
                     if (k != kh_end(dirh)) {
                         struct dirinfo *dir = kh_val(dirh, k);
 
-                        printf("refreshing import dir %s...\n", importdir);
+                        printf("Refreshing import dir %s...\n", importdir);
 
                         refresh_importdir(importdir, dir->ino, name);
                     } else {
@@ -514,6 +514,7 @@ void refresh_imports() {
         }
         free(filepath);
     }
+    printf("Done.\n");
 }
 
 static void smt_init(void *userdata, struct fuse_conn_info *conn) {
@@ -576,7 +577,6 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     }
 
     add_opendir(ROOT);
-    //!add_opendir(HOME);
     refreshdir(NULL, NULL, ROOT);
 
     pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
@@ -594,7 +594,7 @@ void copy_to_backup(char* name) {
 
 static void smt_destroy(void *userdata) {
 
-    printf("smt_destroy: Shutting down...\n");
+    printf("Shutting down...\n");
     int ok = 1;
 
     pthread_detach(refresh_thread);
@@ -810,7 +810,7 @@ static void smt_destroy(void *userdata) {
         }
     }
 
-    printf("smt_destroy: Finished cleanup\n");
+    printf("Finished cleanup.\n");
 }
 
 static void smt_access(fuse_req_t req, fuse_ino_t ino, int mask) {
