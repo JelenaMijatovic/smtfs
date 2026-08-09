@@ -270,7 +270,7 @@ int add_filetodir(const char *dirname, ino_t fileino) {
 
             k = kh_get(opendirhash, opendirh, dir->ino);
                 if (k != kh_end(opendirh)) {
-                    refreshdir(NULL, NULL, dir->ino);
+                    refreshdir(dir->ino);
             }
 
             return 0;
@@ -317,7 +317,7 @@ void remove_filefromdir(const char *dirname, ino_t fileino) {
 
             set_file_xattr(fileino, dirname, RMV);
 
-            refreshdir(NULL, NULL, dir->ino);
+            refreshdir(dir->ino);
         }
 
     }
@@ -694,7 +694,6 @@ khint_t add_opendir(ino_t ino) {
                 if (dir) {
                     dir->openref = 0;
                     dir->index = lvisit.currindex++;
-                    dir->off = 0;
                     lvisit.visits[dir->index].visit = 0;
                     lvisit.visits[dir->index].ino = ino;
 

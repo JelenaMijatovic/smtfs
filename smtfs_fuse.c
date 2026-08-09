@@ -7,6 +7,15 @@
 #include <stdbool.h>
 #include <sys/sysmacros.h>
 
+//filename hashmap used in refreshdir to check for duplicates
+KHASH_MAP_INIT_STR(filenamehash, struct freeino*)
+
+//directory entry buffer for smt_readdir
+struct dirbuf {
+	char *p;
+	off_t size;
+};
+
 static void smt_destroy(void *userdata);
 int recursive_dir(ino_t dirino, ino_t ino);
 struct smtfs_config config;
@@ -577,7 +586,7 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     }
 
     add_opendir(ROOT);
-    refreshdir(NULL, NULL, ROOT);
+    refreshdir(ROOT);
 
     pthread_create(&refresh_thread, NULL, refresh_cache, NULL);
 }
@@ -822,7 +831,7 @@ static void smt_access(fuse_req_t req, fuse_ino_t ino, int mask) {
     fuse_reply_err(req, ENOSYS);
 }
 
-void refreshdir(fuse_req_t req, struct dirbuf *b, ino_t ino) {
+void refreshdir(ino_t ino) {
 
     struct openfileinfo *f = NULL;
     struct dirinfo *dir = NULL;
@@ -969,7 +978,7 @@ static void smt_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
         e.entry_timeout = 10.0;
 
         if ((f->mode & S_IFMT) == S_IFDIR) {
-            refreshdir(req, NULL, f->ino); //!called both on cd and ls
+            refreshdir(f->ino); //!called both on cd and ls
         }
 
         fuse_reply_entry(req, &e);
@@ -1374,7 +1383,7 @@ static void smt_rename(fuse_req_t req, fuse_ino_t parent, const char *name, fuse
                     for (int i = 0; i < f->dirinos->size; i++) {
                         k = kh_get(opendirhash, opendirh, f->dirinos->inos[i]);
                         if (k != kh_end(opendirh)) {
-                            refreshdir(NULL, NULL, f->dirinos->inos[i]);
+                            refreshdir(f->dirinos->inos[i]);
                         }
                     }
 
@@ -1942,8 +1951,7 @@ static int smtfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
     return 1;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     int retval = 0;
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
     struct fuse_cmdline_opts opts;
