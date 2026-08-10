@@ -76,6 +76,11 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
     char *filepath = get_ino_path(config.storage, ino);
 
     if (filepath) {
+        //create the right directory in storage if not already present
+        char *dirpath = dirname(strdup(filepath));
+        mkdir(dirpath, 0700);
+
+        //create file or directory, set name and nlink count as xattrs
         if ((mode & S_IFMT) == S_IFDIR) {
             newfd = mkdir(filepath, mode);
             if (!newfd) {
@@ -91,6 +96,7 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
                 setxattr(filepath, "user.smtfs_m.nlink", &link, sizeof(link), 0);
             }
         }
+        free(dirpath);
         free(filepath);
     }
 

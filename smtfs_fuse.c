@@ -27,28 +27,16 @@ void fatal_error(const char *message) {
     exit(1);
 }
 
+//run on first mount
 void smtfs_setup() {
 
+    //initialise values
     freemap = malloc(sizeof(struct freeino));
-    freemap->ino = 1; //init to 1
+    freemap->ino = 1; //start inodes from 1
     freemap->nextfr = NULL;
     config.used = 0;
 
-    for (int i = 0; i <= 99; i++) {
-        char *filepath = malloc(PATH_MAX);
-        if (filepath) {
-            filepath[0] = '\0';
-            strcat(filepath, config.storage);
-            int length = snprintf(NULL, 0, "/%d", i);
-            char *strino = malloc(length+1);
-            sprintf(strino, "/%d", i);
-            strcat(filepath, strino);
-            free(strino);
-            mkdir(filepath, 0700);
-        }
-        free(filepath);
-    }
-
+    //create system directories
     char *root = strdup("/");
     add_sysdirs(root, S_IFDIR | 0777);
 
@@ -56,27 +44,33 @@ void smtfs_setup() {
     add_sysdirs(tags, S_IFDIR | 0777);
     add_filetodir(root, TAGS);
     free(tags);
+
     char *files = strdup(FILES_FN);
     add_sysdirs(files, S_IFDIR | 0777);
     add_filetodir(root, FILES);
     free(files);
+
     char *home = strdup("_Home");
     add_sysdirs(home, S_IFDIR | 0777);
     add_filetodir(root, HOME);
     free(home);
+
     free(root);
 }
 
+//run on subsequent mounts
 void smtfs_load() {
     khint_t k;
     int absent;
 
+    //remove OK status file from last shutdown
     char* path = get_file_path(config.storage, "/OK");
-    if (path) { //remove status file from last shutdown
+    if (path) {
         remove(path);
         free(path);
-    }
+    } //! try recovering from backup if no OK status file found
 
+    //load data into freemap
     path = get_file_path(config.storage, "/free.txt");
     if (path) {
         FILE *fptr;
@@ -86,7 +80,8 @@ void smtfs_load() {
             struct freeino *prev = malloc(sizeof(struct freeino));
 
             fscanf(fptr, "%lu\n", &config.used);
-            fscanf(fptr, "%lu\n", &prev->ino); //first inode guaranteed
+            //at least one free inode (the first) is always present
+            fscanf(fptr, "%lu\n", &prev->ino);
             freemap = prev;
 
             struct freeino *curr = NULL;
@@ -107,6 +102,7 @@ void smtfs_load() {
         fatal_error("smtfs_load: Couldn't allocate memory");
     }
 
+    //load data into dirhash
     path = get_file_path(config.storage, "/dirs.txt");
     if (path) {
         FILE *fptr;
