@@ -198,7 +198,8 @@ void delete_file_on_disk(ino_t ino, mode_t mode);
 void create_symlink(ino_t ino, char *name, char *target);
 void rename_symlink(ino_t ino, char *newname);
 
-void write_dir_contents(ino_t dirino, struct inoarr *fileinos);
+int write_dirinos_into_file(char *filename);
+int write_dir_contents(ino_t dirino, struct inoarr *fileinos);
 int append_dir_contents(ino_t dirino, ino_t fileino);
 
 void remove_xattr_from_dir(char *dirpath);

@@ -189,12 +189,57 @@ void rename_symlink(ino_t ino, char* newname) {
     }
 }
 
-//contents.txt
-void write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
-    char *filepath = get_ino_path(config.storage, dirino);
+//filename: base name of file to write directory inodes into
+//returns 0 on success, nonzero on failure
+int write_dirinos_into_file(char *filename) {
+
+    char *filepath = get_file_path(config.storage, filename);
+    int res = -1;
 
     if (filepath) {
-        strcat(filepath, "/contents.txt");
+        int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
+
+        if (newfd) {
+            char *strino;
+
+            for (khint_t k = 0; k < kh_end(dirh); ++k) {
+                if (kh_exist(dirh, k)) {
+                    struct dirinfo* dir = kh_val(dirh, k);
+                    int length = snprintf(NULL, 0, "%ld\n", dir->ino);
+                    strino = malloc(length+1);
+                    sprintf(strino, "%ld\n", dir->ino);
+                    write(newfd, strino, length);
+                    free(strino);
+
+                }
+            }
+            res = close(newfd);
+        }
+        free(filepath);
+    }
+
+    return res;
+}
+
+//dirino: inode of directory whose contents to write on disk
+//fileinos: array of inodes to write into contents.txt
+//returns 0 on success, nonzero on failure
+int write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
+
+    char *filepath;
+    int res = -1;
+
+    if (dirino) {
+        filepath = get_ino_path(config.storage, dirino);
+    } else {
+        //!mkdir ERR folder
+        filepath = get_file_path(config.storage, "/ERR.txt");
+    }
+
+    if (filepath) {
+        if (dirino) {
+            strcat(filepath, "/contents.txt");
+        }
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
@@ -205,18 +250,18 @@ void write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
                 write(newfd, strino, length);
                 free(strino);
             }
-            close(newfd);
-        } else {
-            printf("write_dir_contents: Couldn't write to contents.txt for dir %ld!\n", dirino);
+            res = close(newfd);
         }
         free(filepath);
     }
+
+    return res;
 }
 
 int append_dir_contents(ino_t dirino, ino_t fileino) {
 
-    int res = -1;
     char *filepath = get_ino_path(config.storage, dirino);
+    int res = -1;
 
     if (filepath) {
         strcat(filepath, "/contents.txt");
@@ -226,11 +271,10 @@ int append_dir_contents(ino_t dirino, ino_t fileino) {
             int length = snprintf(NULL, 0, "%ld\n", fileino);
             char *strino = malloc(length+1);
             sprintf(strino, "%ld\n", fileino);
-            res = write(newfd, strino, length);
+            write(newfd, strino, length);
             free(strino);
-            close(newfd);
-        } else {
-            printf("append_dir_contents: Couldn't write to contents.txt for dir %ld!\n", dirino);
+
+            res = close(newfd);
         }
         free(filepath);
     }

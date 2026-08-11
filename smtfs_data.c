@@ -754,8 +754,6 @@ khint_t add_opendir(ino_t ino) {
 
 void remove_opendir(ino_t ino, int sys_running) {
 
-    //printf("remove_opendir: %ld\n", ino);
-
     khint_t k;
 
     k = kh_get(opendirhash, opendirh, ino);
@@ -763,7 +761,11 @@ void remove_opendir(ino_t ino, int sys_running) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.currindex = opendir->index;
 
-        write_dir_contents(ino, opendir->fileinos);
+        int res = write_dir_contents(ino, opendir->fileinos);
+        if (res) {
+            printf("remove_opendir: Failed to write to directory contents to disk for dir %ld\n", ino);
+            res = write_dir_contents(0, opendir->fileinos);
+        }
 
         for (int i = 0; i < opendir->fileinos->size; i++) {
             remove_openfile(opendir->fileinos->inos[i], kh_end(fcache));

@@ -597,6 +597,7 @@ void copy_to_backup(char* name) {
     }
 }
 
+//runs on unmount, writes to disk and clears memory
 static void smt_destroy(void *userdata) {
 
     printf("Shutting down...\n");
@@ -605,6 +606,7 @@ static void smt_destroy(void *userdata) {
     pthread_detach(refresh_thread);
     pthread_cancel(refresh_thread);
 
+    //save and clear directory cache
     for (khint_t k = 0; k < kh_end(opendirh); ++k)
         if (kh_exist(opendirh, k)) {
             remove_opendir(kh_key(opendirh, k), STOP);
@@ -613,26 +615,12 @@ static void smt_destroy(void *userdata) {
     kh_destroy(opendirhash, opendirh);
     free(lvisit.visits);
 
-    char *filepath = get_file_path(config.storage, "/dirs.txt");
-    if (filepath) {
-        int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
-        if (newfd) {
-            char *strino;
-            for (khint_t k = 0; k < kh_end(dirh); ++k)
-                if (kh_exist(dirh, k)) {
-                    struct dirinfo* dir = kh_val(dirh, k);
-                    int length = snprintf(NULL, 0, "%ld\n", dir->ino);
-                    strino = malloc(length+1);
-                    sprintf(strino, "%ld\n", dir->ino);
-                    write(newfd, strino, length);
-                    free(strino);
-                }
-        } else {
-            printf("smt_destroy: Couldn't write to dirs.txt!\n");
-            ok = 0;
-        }
-        free(filepath);
-        close(newfd);
+    //try to write directory inodes into dirs.txt
+    int res = write_dirinos_into_file("/dirs.txt");
+    if (res) {
+        printf("smt_destroy: Couldn't write to dirs.txt!\n");
+        ok = 0;
+        res = write_dirinos_into_file("/ERR.txt");
     }
 
     for (khint_t k = 0; k < kh_end(dirh); ++k)
@@ -653,7 +641,7 @@ static void smt_destroy(void *userdata) {
         }
     kh_destroy(openfilehash, fcache);
 
-    filepath = get_file_path(config.storage, "/free.txt");
+    char *filepath = get_file_path(config.storage, "/free.txt");
     if (filepath) {
         int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
         if (newfd) {
