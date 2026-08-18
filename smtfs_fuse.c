@@ -542,6 +542,8 @@ static void smt_init(void *userdata, struct fuse_conn_info *conn) {
     config.backup = fuseconf->backup;
     config.dev = fuseconf->dev;
     config.blksize = fuseconf->blksize;
+    config.errcount = 0;
+    config.errpath = get_file_path(config.storage, "/ERR");
 
     //test if storage is set up
     DIR *test_fd = NULL;
@@ -601,7 +603,8 @@ void copy_to_backup(char* name) {
 static void smt_destroy(void *userdata) {
 
     printf("Shutting down...\n");
-    int ok = 1;
+
+    int ok;
 
     pthread_detach(refresh_thread);
     pthread_cancel(refresh_thread);
@@ -611,18 +614,14 @@ static void smt_destroy(void *userdata) {
         if (kh_exist(opendirh, k)) {
             remove_opendir(kh_key(opendirh, k), STOP);
         }
-
     kh_destroy(opendirhash, opendirh);
+
     free(lvisit.visits);
 
-    //try to write directory inodes into dirs.txt
-    int res = write_dirinos_into_file("/dirs.txt");
-    if (res) {
-        printf("smt_destroy: Couldn't write to dirs.txt!\n");
-        ok = 0;
-        res = write_dirinos_into_file("/ERR.txt");
-    }
+    //save directory inodes into dirs.txt
+    write_dirinos_into_file(config.storage, "/dirs.txt");
 
+    //clear dirhash
     for (khint_t k = 0; k < kh_end(dirh); ++k)
         if (kh_exist(dirh, k)) {
             struct dirinfo* dir = kh_val(dirh, k);
@@ -631,13 +630,10 @@ static void smt_destroy(void *userdata) {
         }
     kh_destroy(dirhash, dirh);
 
+    //save and clear file cache
     for (khint_t k = 0; k < kh_end(fcache); ++k)
         if (kh_exist(fcache, k)) {
-            struct openfileinfo* f = kh_val(fcache, k);
-            free(f->name);
-            free(f->dirinos->inos);
-            free(f->dirinos);
-            free(f);
+            remove_openfile(kh_key(fcache, k), STOP);
         }
     kh_destroy(openfilehash, fcache);
 
@@ -681,6 +677,12 @@ static void smt_destroy(void *userdata) {
             close(fd);
         }
         free(filepath);
+    }
+
+    if (config.errcount) {
+        ok = 0;
+    } else {
+        ok = 1;
     }
 
     if (ok) {
@@ -802,6 +804,8 @@ static void smt_destroy(void *userdata) {
             free(okpath);
         }
     }
+
+    free(config.errpath);
 
     printf("Finished cleanup.\n");
 }

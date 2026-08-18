@@ -10,7 +10,7 @@ void* refresh_cache(void* arg) {
                 struct openfileinfo *f = kh_val(fcache, k);
                 //printf("%s %ld\n", f->name, f->visit);
                 if (f->ino != ROOT && time(NULL)-f->visit > REFRESH_PERIOD) {
-                    remove_openfile(f->ino, k);
+                    remove_openfile(f->ino, RUNNING);
                 }
             }
         //printf("\n");

@@ -26,8 +26,8 @@
 
 #define ADD 1 //add xattr
 #define RMV 0 //remove xattr
-#define RUNNING 1 //passed to remove_opendir
-#define STOP 0 //passed to remove_opendir if in smt_destroy
+#define RUNNING 1 //passed to remove_opendir/remove_openfile
+#define STOP 0 //passed to remove_opendir/remove_openfile if in smt_destroy
 
 //system directories
 #define ROOT 1
@@ -39,6 +39,13 @@
 #define HOME 4
 #define HOME_FN "_Home"
 #define SYSDIR 4
+
+//error codes
+#define DIRCONTERR 1
+#define SETNAMEXATTRERR 2
+#define SETNLINKXATTRERR 3
+#define TIMESETERR 4
+#define DIRINOERR 5
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
 #define max(x, y) ((x) > (y) ? (x) : (y))
@@ -65,6 +72,8 @@ struct smtfs_config {
     dev_t dev;
     blksize_t blksize;
     ino_t used; //used inode count
+    int errcount; //error count since mounting
+    char *errpath;
     char *devfile;
     char *storage;
     char *backup;
@@ -178,7 +187,7 @@ int add_sysdirs(const char *name, mode_t mode);
 ino_t add_file(const char *name, mode_t mode, off_t size);
 int remove_file(ino_t ino);
 khint_t add_openfile(ino_t ino);
-void remove_openfile(ino_t ino, khint_t k);
+void remove_openfile(ino_t ino, int sys_running);
 
 khint_t add_opendir(ino_t ino);
 void remove_opendir(ino_t ino, int sys_running);
@@ -193,17 +202,20 @@ void* get_xattr_from_file(ino_t ino, char *name);
 void set_file_xattr(ino_t ino, const char *tag, int mode);
 
 int open_file(ino_t ino, const char *name, mode_t mode);
+void set_file_attributes(struct openfileinfo *f);
 void delete_file_on_disk(ino_t ino, mode_t mode);
 
 void create_symlink(ino_t ino, char *name, char *target);
 void rename_symlink(ino_t ino, char *newname);
 
-int write_dirinos_into_file(char *filename);
+int write_dirinos_into_file(char *root, char *filename);
 int write_dir_contents(ino_t dirino, struct inoarr *fileinos);
 int append_dir_contents(ino_t dirino, ino_t fileino);
 
 void remove_xattr_from_dir(char *dirpath);
 void export_metadata_txt(char *devpath, char *storagepath);
+
+void write_error_file(ino_t ino, int errtype, void *data);
 
 //smtfs_fuse.c
 void fatal_error(const char *message);

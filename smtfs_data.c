@@ -621,35 +621,19 @@ khint_t add_openfile(ino_t ino) {
     return k;
 }
 
-void remove_openfile(ino_t ino, khint_t k) {
+void remove_openfile(ino_t ino, int sys_running) {
 
-    //printf("remove_openfile: %ld\n", ino);
     struct openfileinfo *f = NULL;
 
-    if (k == kh_end(fcache)) {
-        k = kh_get(openfilehash, fcache, ino);
-        if (k != kh_end(fcache)) {
-            f = kh_val(fcache, k);
-        }
-    } else {
+    khint_t k = kh_get(openfilehash, fcache, ino);
+    if (k != kh_end(fcache)) {
         f = kh_val(fcache, k);
     }
 
-    if (f && f->nref < 1) {
-        char *filepath = get_ino_path(config.storage, ino);
-        if (filepath) {
-            setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
-            setxattr(filepath, "user.smtfs_m.nlink", &f->nlink, sizeof(f->nlink), 0);
+    if (f && (f->nref < 1 || !sys_running)) {
+        //save attributes on disk
+        set_file_attributes(f);
 
-            struct timespec times[2];
-            times[0].tv_sec = f->atime.tv_sec;
-            times[0].tv_nsec = f->atime.tv_nsec;
-            times[1].tv_sec = f->mtime.tv_sec;
-            times[1].tv_nsec = f->mtime.tv_nsec;
-            utimensat(AT_FDCWD, filepath, times, AT_SYMLINK_NOFOLLOW);
-
-            free(filepath);
-        }
         free(f->name);
         free(f->dirinos->inos);
         free(f->dirinos);
@@ -671,7 +655,6 @@ khint_t add_opendir(ino_t ino) {
         if ((f->mode & S_IFMT) == S_IFDIR) {
             k = kh_get(opendirhash, opendirh, ino);
             if (k == kh_end(opendirh)) {
-                //printf("add_opendir: %ld\n", ino);
 
                 if (kh_size(opendirh) >= MAX_OPEN) {
                     struct vst *visits = lvisit.visits;
@@ -761,14 +744,10 @@ void remove_opendir(ino_t ino, int sys_running) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.currindex = opendir->index;
 
-        int res = write_dir_contents(ino, opendir->fileinos);
-        if (res) {
-            printf("remove_opendir: Failed to write to directory contents to disk for dir %ld\n", ino);
-            res = write_dir_contents(0, opendir->fileinos);
-        }
+        write_dir_contents(ino, opendir->fileinos);
 
         for (int i = 0; i < opendir->fileinos->size; i++) {
-            remove_openfile(opendir->fileinos->inos[i], kh_end(fcache));
+            remove_openfile(opendir->fileinos->inos[i], sys_running);
         }
 
         free(opendir->fileinos->inos);

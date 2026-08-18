@@ -30,6 +30,20 @@ char* get_file_path(char* root, char* filename) {
     return filepath;
 }
 
+char* get_err_path(int err) {
+    char *filepath = malloc(PATH_MAX);
+    if (filepath) {
+        filepath[0] = '\0';
+        strcat(filepath, config.errpath);
+        int length = snprintf(NULL, 0, "/%d", err);
+        char *strnum = malloc(length+1);
+        sprintf(strnum, "/%d", err);
+        strcat(filepath, strnum);
+        free(strnum);
+    }
+    return filepath;
+}
+
 //xattr
 void* get_xattr_from_file(ino_t ino, char* name) {
     char *buf = NULL;
@@ -49,23 +63,23 @@ void* get_xattr_from_file(ino_t ino, char* name) {
 void set_file_xattr(ino_t ino, const char *tag, int mode) {
 
     char *filepath = get_ino_path(config.storage, ino);
-    char *filename = malloc(PATH_MAX);
+    char *name = malloc(PATH_MAX);
 
-    if (filepath && filename) {
-        filename[0] = '\0';
-        strcat(filename, "user.smtfs.");
+    if (filepath && name) {
+        name[0] = '\0';
+        strcat(name, "user.smtfs.");
         int length = snprintf(NULL, 0, "%s", tag);
         char *strino = malloc(length+1);
         sprintf(strino, "%s", tag);
-        strcat(filename, strino);
+        strcat(name, strino);
         free(strino);
 
         if (mode == ADD) {
-            setxattr(filepath, filename, "", 0, 0);
+            setxattr(filepath, name, "", 0, 0);
         } else {
-            removexattr(filepath, filename);
+            removexattr(filepath, name);
         }
-        free(filename);
+        free(name);
     }
     free(filepath);
 }
@@ -101,6 +115,39 @@ int open_file(ino_t ino, const char* name, mode_t mode) {
     }
 
     return newfd;
+}
+
+void set_file_attributes(struct openfileinfo *f) {
+	char *filepath = get_ino_path(config.storage, f->ino);
+    if (filepath) {
+        int res1 = setxattr(filepath, "user.smtfs_m.name", f->name, strlen(f->name)+1, 0);
+
+        if (res1) {
+            printf("set_file_attributes: Failed to set xattr user.smtfs_m.name for file %ld, code %d. Logging error...\n", f->ino, errno);
+            write_error_file(f->ino, SETNAMEXATTRERR, f->name);
+		}
+
+        int res2 = setxattr(filepath, "user.smtfs_m.nlink", &f->nlink, sizeof(f->nlink), 0);
+
+		if (res2) {
+            printf("set_file_attributes: Failed to set xattr user.smtfs_m.nlink for file %ld, code %d. Logging error...\n", f->ino, errno);
+            write_error_file(f->ino, SETNLINKXATTRERR, &f->nlink);
+		}
+
+        struct timespec times[2];
+        times[0].tv_sec = f->atime.tv_sec;
+        times[0].tv_nsec = f->atime.tv_nsec;
+        times[1].tv_sec = f->mtime.tv_sec;
+        times[1].tv_nsec = f->mtime.tv_nsec;
+        int res3 = utimensat(AT_FDCWD, filepath, times, AT_SYMLINK_NOFOLLOW);
+
+		if (res3) {
+            printf("set_file_attributes: Failed to set timestamp for file %ld, code %d. Logging error...\n", f->ino, errno);
+            write_error_file(f->ino, TIMESETERR, times);
+		}
+
+        free(filepath);
+    }
 }
 
 void delete_file_on_disk(ino_t ino, mode_t mode) {
@@ -189,12 +236,18 @@ void rename_symlink(ino_t ino, char* newname) {
     }
 }
 
-//filename: base name of file to write directory inodes into
+//root: parent directory of file to write into
+//filename: base name of file to write directory inodes into.
 //returns 0 on success, nonzero on failure
-int write_dirinos_into_file(char *filename) {
+int write_dirinos_into_file(char *root, char *filename) {
 
-    char *filepath = get_file_path(config.storage, filename);
-    int res = -1;
+    char *filepath;
+    if (!strncmp(root, config.errpath, strlen(config.errpath))) {
+        filepath = get_err_path(config.errcount);
+    } else {
+        filepath = get_file_path(root, filename);
+    }
+    int res = -1, err = 0;
 
     if (filepath) {
         int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
@@ -214,30 +267,36 @@ int write_dirinos_into_file(char *filename) {
                 }
             }
             res = close(newfd);
+            err = errno;
         }
         free(filepath);
+    }
+
+    if (res && strncmp(root, config.errpath, strlen(config.errpath))) {
+        printf("write_dirinos_into_file: Failed to write directory inodes into file %s, code %d. Logging error...\n", filename, err);
+        write_error_file(0, DIRINOERR, NULL);
     }
 
     return res;
 }
 
-//dirino: inode of directory whose contents to write on disk
+//dirino: inode of directory whose contents to write on disk. If negative, treated as error counter
 //fileinos: array of inodes to write into contents.txt
 //returns 0 on success, nonzero on failure
 int write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
 
     char *filepath;
     int res = -1;
+    int err = 0;
 
-    if (dirino) {
+    if (dirino > 0) {
         filepath = get_ino_path(config.storage, dirino);
     } else {
-        //!mkdir ERR folder
-        filepath = get_file_path(config.storage, "/ERR.txt");
+        filepath = get_err_path(-dirino);
     }
 
     if (filepath) {
-        if (dirino) {
+        if (dirino > 0) {
             strcat(filepath, "/contents.txt");
         }
 
@@ -251,8 +310,14 @@ int write_dir_contents(ino_t dirino, struct inoarr *fileinos) {
                 free(strino);
             }
             res = close(newfd);
+            err = errno;
         }
         free(filepath);
+    }
+
+    if (res && dirino > 0) {
+        printf("write_dir_contents: Failed to write directory contents to disk for dir %ld, code %d. Logging error...\n", dirino, err);
+        write_error_file(dirino, DIRCONTERR, fileinos);
     }
 
     return res;
@@ -446,4 +511,68 @@ void export_metadata_txt(char* devfile, char* storagepath) {
         close(newfd);
     }
     free(dirpath);
+}
+
+void write_error_file(ino_t ino, int errtype, void *data) {
+
+    int res = -1;
+
+    mkdir(config.errpath, 0700);
+
+    char *filepath = get_err_path(++config.errcount);
+    if (filepath) {
+
+        int fd = open(filepath, O_WRONLY | O_APPEND | O_TRUNC | O_CREAT, 0777);
+
+        if (fd != -1) {
+            int temp = errtype;
+
+            int res1 = setxattr(filepath, "user.smtfs_m.ino", &ino, sizeof(ino_t), 0);
+            int res2 = setxattr(filepath, "user.smtfs_m.error", &temp, sizeof(int), 0);
+
+            switch (errtype) {
+                case DIRCONTERR: {
+
+                    int res3 = write_dir_contents(-config.errcount, data);
+
+                    res = res1 | res2 | res3;
+                    break;
+                }
+                case SETNAMEXATTRERR: {
+
+                    int res3 = setxattr(filepath, "user.smtfs_m.data", data, strlen(data)+1, 0);
+
+                    res = res1 | res2 | res3;
+                    break;
+                }
+                case SETNLINKXATTRERR: {
+
+                    int res3 = setxattr(filepath, "user.smtfs_m.data", data, sizeof(int), 0);
+
+                    res = res1 | res2 | res3;
+                    break;
+                }
+                case TIMESETERR: {
+
+                    int res3 = setxattr(filepath, "user.smtfs_m.data", data, 2*sizeof(struct timespec), 0);
+
+                    res = res1 | res2 | res3;
+                    break;
+                }
+                case DIRINOERR: {
+
+                    int res3 = write_dirinos_into_file(config.errpath, 0);
+
+                    res = res1 | res2 | res3;
+                    break;
+                }
+            }
+        }
+
+        free(filepath);
+    }
+
+    if (res) {
+        printf("WARNING: Failed to log error; data loss is likely. It's recommended you restart smtfs as soon as possible.");
+    }
 }
