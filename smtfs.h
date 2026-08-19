@@ -199,6 +199,8 @@ ino_t dirset(const char *name, const char *pos);
 char* get_ino_path(char *root, ino_t ino); //storageroot/(ino/DIRSPLIT)/ino
 char* get_file_path(char *root, char *filename); //storageroot/filename
 
+void create_backup(char *root);
+
 void* get_xattr_from_file(ino_t ino, char *name);
 void set_file_xattr(ino_t ino, const char *tag, int mode);
 

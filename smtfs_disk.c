@@ -44,6 +44,139 @@ char* get_err_path(int err) {
     return filepath;
 }
 
+void copy_to_backup(char* name) {
+    char* backuppath = get_file_path(config.backup, name);
+    char* ogpath = get_file_path(config.storage, name);
+    if (backuppath && ogpath) {
+        cp(backuppath, ogpath);
+        free(backuppath);
+        free(ogpath);
+    }
+}
+
+void create_backup(char *root) {
+
+    //!check root
+
+    copy_to_backup("/dirs.txt");
+    copy_to_backup("/free.txt");
+    copy_to_backup("/imports.txt");
+
+    for (int i = 0; i <= 99; i++) {
+        char *filepath = malloc(PATH_MAX);
+        if (filepath) {
+            filepath[0] = '\0';
+            strcat(filepath, config.storage);
+            int length = snprintf(NULL, 0, "/%d", i);
+            char *strino = malloc(length+1);
+            sprintf(strino, "/%d", i);
+            strcat(filepath, strino);
+
+            DIR *imfd = opendir(filepath);
+            if (imfd) {
+                struct dirent *entry = NULL;
+
+                //delete existing backup first
+                char *bdirpath = get_file_path(root, strino);
+                if (bdirpath) {
+                    mkdir(bdirpath, 0777);
+                    DIR *bkfd = opendir(bdirpath);
+                    if (bkfd) {
+                        while ((entry = readdir(bkfd)) != NULL) {
+                            if (strncmp(entry->d_name, ".", 1)) {
+                                ino_t ino;
+                                sscanf(entry->d_name, "%ld", &ino);
+                                char *entrpath = get_ino_path(root, ino);
+                                if (entrpath) {
+                                    remove(entrpath);
+                                    free(entrpath);
+                                }
+                            }
+                        }
+                        closedir(bkfd);
+                    }
+                    free(bdirpath);
+                }
+
+                struct stat stbuf;
+                memset(&stbuf, 0, sizeof(stbuf));
+
+                while ((entry = readdir(imfd)) != NULL) {
+                    if (strncmp(entry->d_name, ".", 1)) {
+                        ino_t ino;
+                        sscanf(entry->d_name, "%ld", &ino);
+                        char *entrpath = get_ino_path(config.storage, ino);
+                        char *backuppath = get_ino_path(root, ino);
+                        if (entrpath && backuppath) {
+
+                            //create backup files
+                            lstat(entrpath, &stbuf);
+                            if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+                                mkdir(backuppath, 0777);
+                                char *contpathb = get_file_path(backuppath, "/contents.txt");
+                                char *contpaths = get_file_path(entrpath, "/contents.txt");
+
+                                if (contpathb && contpaths) {
+                                    cp(contpathb, contpaths);
+                                    free(contpathb);
+                                    free(contpaths);
+                                }
+                            } else if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                                int fd = open(backuppath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
+
+                                char *buf = malloc(stbuf.st_size + 1);
+                                readlink(entrpath, buf, stbuf.st_size);
+                                buf[stbuf.st_size] = '\0';
+                                write(fd, buf, stbuf.st_size);
+                                free(buf);
+
+                                close(fd);
+                            } else {
+                                int fd = open(backuppath, O_RDONLY | O_CREAT, 0777);
+                                close(fd);
+                            }
+
+                            //backup xattrs
+                            int size = listxattr(entrpath, 0, 0);
+                            if (size > 0) {
+                                char* list = malloc(size);
+                                if (list) {
+                                    listxattr(entrpath, list, size);
+                                    int sum = 0;
+                                    char *s = list;
+                                    while (sum < size) {
+                                        sum += strlen(s)+1;
+                                        if (s) {
+                                            int psize = getxattr(entrpath, s, 0, 0);
+                                            char *buf = malloc(psize);
+                                            if (buf) {
+                                                getxattr(entrpath, s, buf, psize);
+                                                setxattr(backuppath, s, buf, psize, 0);
+
+                                                free(buf);
+                                            }
+                                        }
+                                        s = strchr(s, '\0');
+                                        s++;
+                                    }
+                                    free(list);
+                                }
+                            }
+
+                            memset(&stbuf, 0, sizeof(stbuf));
+                            free(entrpath);
+                            free(backuppath);
+                        }
+                    }
+                }
+                closedir(imfd);
+            }
+            free(strino);
+            free(filepath);
+        }
+    }
+}
+
 //xattr
 void* get_xattr_from_file(ino_t ino, char* name) {
     char *buf = NULL;
