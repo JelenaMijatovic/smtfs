@@ -46,6 +46,7 @@
 #define SETNLINKXATTRERR 3
 #define TIMESETERR 4
 #define DIRINOERR 5
+#define FREEMAPERR 6
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
 #define max(x, y) ((x) > (y) ? (x) : (y))
@@ -209,6 +210,7 @@ void create_symlink(ino_t ino, char *name, char *target);
 void rename_symlink(ino_t ino, char *newname);
 
 int write_dirinos_into_file(char *root, char *filename);
+int write_freemap_into_file(char *root, char *filename);
 int write_dir_contents(ino_t dirino, struct inoarr *fileinos);
 int append_dir_contents(ino_t dirino, ino_t fileino);
 

@@ -280,6 +280,54 @@ int write_dirinos_into_file(char *root, char *filename) {
     return res;
 }
 
+//root: parent directory of file to write into
+//filename: base name of file to write free inodes into.
+//returns 0 on success, nonzero on failure
+int write_freemap_into_file(char *root, char *filename) {
+
+    char *filepath;
+    if (!strncmp(root, config.errpath, strlen(config.errpath))) {
+        filepath = get_err_path(config.errcount);
+    } else {
+        filepath = get_file_path(root, filename);
+    }
+    int res = -1, err = 0;
+
+    if (filepath) {
+        int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
+        if (newfd) {
+            int length;
+            char *strino;
+
+            length = snprintf(NULL, 0, "%ld\n", config.used);
+            strino = malloc(length+1);
+            sprintf(strino, "%ld\n", config.used);
+            write(newfd, strino, length);
+            free(strino);
+
+            struct freeino *curr = freemap;
+            while (curr) {
+                length = snprintf(NULL, 0, "%ld\n", curr->ino);
+                strino = malloc(length+1);
+                sprintf(strino, "%ld\n", curr->ino);
+                write(newfd, strino, length);
+                free(strino);
+                curr = curr->nextfr;
+            }
+            res = close(newfd);
+            err = errno;
+        }
+        free(filepath);
+    }
+
+    if (res && strncmp(root, config.errpath, strlen(config.errpath))) {
+        printf("write_freemap_into_file: Failed to write freemap into file %s, code %d. Logging error...\n", filename, err);
+        write_error_file(0, FREEMAPERR, NULL);
+    }
+
+    return res;
+}
+
 //dirino: inode of directory whose contents to write on disk. If negative, treated as error counter
 //fileinos: array of inodes to write into contents.txt
 //returns 0 on success, nonzero on failure
@@ -562,6 +610,13 @@ void write_error_file(ino_t ino, int errtype, void *data) {
                 case DIRINOERR: {
 
                     int res3 = write_dirinos_into_file(config.errpath, 0);
+
+                    res = res1 | res2 | res3;
+                    break;
+                }
+                case FREEMAPERR: {
+
+                    int res3 = write_freemap_into_file(config.errpath, 0);
 
                     res = res1 | res2 | res3;
                     break;

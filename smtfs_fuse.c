@@ -637,40 +637,20 @@ static void smt_destroy(void *userdata) {
         }
     kh_destroy(openfilehash, fcache);
 
-    char *filepath = get_file_path(config.storage, "/free.txt");
-    if (filepath) {
-        int newfd = open(filepath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
-        if (newfd) {
-            int length;
-            char *strino;
+    //save freemap
+    write_freemap_into_file(config.storage, "/free.txt");
 
-            length = snprintf(NULL, 0, "%ld\n", config.used);
-            strino = malloc(length+1);
-            sprintf(strino, "%ld\n", config.used);
-            write(newfd, strino, length);
-            free(strino);
-
-            struct freeino *curr = freemap;
-            struct freeino *temp;
-            while (curr) {
-                length = snprintf(NULL, 0, "%ld\n", curr->ino);
-                strino = malloc(length+1);
-                sprintf(strino, "%ld\n", curr->ino);
-                write(newfd, strino, length);
-                free(strino);
-                temp = curr;
-                curr = curr->nextfr;
-                free(temp);
-            }
-        } else {
-            printf("smt_destroy: Couldn't write to free.txt!\n");
-            ok = 0;
-        }
-        free(filepath);
-        close(newfd);
+    //clear freemap
+    struct freeino *curr = freemap;
+    struct freeino *temp;
+    while (curr) {
+        temp = curr;
+        curr = curr->nextfr;
+        free(temp);
     }
 
-    filepath = get_file_path(config.storage, "/imports.txt");
+    //create imports.txt
+    char *filepath = get_file_path(config.storage, "/imports.txt");
     if (filepath) {
         int fd = open(filepath, O_RDONLY | O_CREAT, 0777);
         if (fd) {
