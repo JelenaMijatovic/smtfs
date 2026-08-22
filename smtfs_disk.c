@@ -56,124 +56,154 @@ void copy_to_backup(char* name) {
 
 void create_backup(char *root) {
 
-    //!check root
+    int res;
+    struct stat stbuf;
+    memset(&stbuf, 0, sizeof(stbuf));
 
-    copy_to_backup("/dirs.txt");
-    copy_to_backup("/free.txt");
-    copy_to_backup("/imports.txt");
+    DIR *bkfd = opendir(root);
+    //check if backup directory is ok
+    if (bkfd) {
+        closedir(bkfd);
 
-    for (int i = 0; i <= 99; i++) {
-        char *filepath = malloc(PATH_MAX);
-        if (filepath) {
-            filepath[0] = '\0';
-            strcat(filepath, config.storage);
-            int length = snprintf(NULL, 0, "/%d", i);
-            char *strino = malloc(length+1);
-            sprintf(strino, "/%d", i);
-            strcat(filepath, strino);
+        copy_to_backup("/dirs.txt");
+        copy_to_backup("/free.txt");
+        copy_to_backup("/imports.txt");
 
-            DIR *imfd = opendir(filepath);
-            if (imfd) {
-                struct dirent *entry = NULL;
+        for (int i = 0; i <= 99; i++) {
+            char *filepath = malloc(PATH_MAX);
+            if (filepath) {
+                filepath[0] = '\0';
+                strcat(filepath, config.storage);
+                int length = snprintf(NULL, 0, "/%d", i);
+                char *strino = malloc(length+1);
+                sprintf(strino, "/%d", i);
+                strcat(filepath, strino);
 
-                //delete existing backup first
-                char *bdirpath = get_file_path(root, strino);
-                if (bdirpath) {
-                    mkdir(bdirpath, 0777);
-                    DIR *bkfd = opendir(bdirpath);
-                    if (bkfd) {
-                        while ((entry = readdir(bkfd)) != NULL) {
-                            if (strncmp(entry->d_name, ".", 1)) {
-                                ino_t ino;
-                                sscanf(entry->d_name, "%ld", &ino);
-                                char *entrpath = get_ino_path(root, ino);
-                                if (entrpath) {
-                                    remove(entrpath);
-                                    free(entrpath);
-                                }
-                            }
-                        }
-                        closedir(bkfd);
-                    }
-                    free(bdirpath);
-                }
+                DIR *imfd = opendir(filepath);
+                if (imfd) {
+                    struct dirent *entry = NULL;
 
-                struct stat stbuf;
-                memset(&stbuf, 0, sizeof(stbuf));
+                    //delete existing backup first
+                    char *bdirpath = get_file_path(root, strino);
+                    if (bdirpath) {
+                        mkdir(bdirpath, 0777);
+                        DIR *bkfd = opendir(bdirpath);
+                        if (bkfd) {
+                            while ((entry = readdir(bkfd)) != NULL) {
+                                if (strncmp(entry->d_name, ".", 1)) {
+                                    ino_t ino;
+                                    sscanf(entry->d_name, "%ld", &ino);
+                                    char *entrpath = get_ino_path(root, ino);
+                                    if (entrpath) {
+                                        lstat(entrpath, &stbuf);
+                                        if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+                                            char *contpaths = get_file_path(entrpath, "/contents.txt");
 
-                while ((entry = readdir(imfd)) != NULL) {
-                    if (strncmp(entry->d_name, ".", 1)) {
-                        ino_t ino;
-                        sscanf(entry->d_name, "%ld", &ino);
-                        char *entrpath = get_ino_path(config.storage, ino);
-                        char *backuppath = get_ino_path(root, ino);
-                        if (entrpath && backuppath) {
-
-                            //create backup files
-                            lstat(entrpath, &stbuf);
-                            if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
-                                mkdir(backuppath, 0777);
-                                char *contpathb = get_file_path(backuppath, "/contents.txt");
-                                char *contpaths = get_file_path(entrpath, "/contents.txt");
-
-                                if (contpathb && contpaths) {
-                                    cp(contpathb, contpaths);
-                                    free(contpathb);
-                                    free(contpaths);
-                                }
-                            } else if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                                int fd = open(backuppath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
-
-                                char *buf = malloc(stbuf.st_size + 1);
-                                readlink(entrpath, buf, stbuf.st_size);
-                                buf[stbuf.st_size] = '\0';
-                                write(fd, buf, stbuf.st_size);
-                                free(buf);
-
-                                close(fd);
-                            } else {
-                                int fd = open(backuppath, O_RDONLY | O_CREAT, 0777);
-                                close(fd);
-                            }
-
-                            //backup xattrs
-                            int size = listxattr(entrpath, 0, 0);
-                            if (size > 0) {
-                                char* list = malloc(size);
-                                if (list) {
-                                    listxattr(entrpath, list, size);
-                                    int sum = 0;
-                                    char *s = list;
-                                    while (sum < size) {
-                                        sum += strlen(s)+1;
-                                        if (s) {
-                                            int psize = getxattr(entrpath, s, 0, 0);
-                                            char *buf = malloc(psize);
-                                            if (buf) {
-                                                getxattr(entrpath, s, buf, psize);
-                                                setxattr(backuppath, s, buf, psize, 0);
-
-                                                free(buf);
+                                            res = remove(contpaths);
+                                            if (res) {
+                                                printf("create_backup: Error while deleting previous backup, code %d\n", errno);
                                             }
+
+                                            free(contpaths);
                                         }
-                                        s = strchr(s, '\0');
-                                        s++;
+
+                                        res = remove(entrpath);
+                                        if (res) {
+                                            printf("create_backup: Error while deleting previous backup, code %d\n", errno);
+                                        }
+
+                                        memset(&stbuf, 0, sizeof(stbuf));
+                                        free(entrpath);
                                     }
-                                    free(list);
                                 }
                             }
+                            closedir(bkfd);
+                        }
+                        free(bdirpath);
+                    }
 
-                            memset(&stbuf, 0, sizeof(stbuf));
-                            free(entrpath);
-                            free(backuppath);
+                    while ((entry = readdir(imfd)) != NULL) {
+                        if (strncmp(entry->d_name, ".", 1)) {
+                            ino_t ino;
+                            sscanf(entry->d_name, "%ld", &ino);
+                            char *entrpath = get_ino_path(config.storage, ino);
+                            char *backuppath = get_ino_path(root, ino);
+                            if (entrpath && backuppath) {
+
+                                //create backup files
+                                lstat(entrpath, &stbuf);
+                                if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+                                    res = mkdir(backuppath, 0777);
+                                    char *contpathb = get_file_path(backuppath, "/contents.txt");
+                                    char *contpaths = get_file_path(entrpath, "/contents.txt");
+
+                                    if (contpathb && contpaths) {
+                                        cp(contpathb, contpaths);
+                                        free(contpathb);
+                                        free(contpaths);
+                                    }
+                                } else if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
+                                    int fd = open(backuppath, O_WRONLY | O_TRUNC | O_CREAT, 0777);
+
+                                    char *buf = malloc(stbuf.st_size + 1);
+                                    readlink(entrpath, buf, stbuf.st_size);
+                                    buf[stbuf.st_size] = '\0';
+                                    write(fd, buf, stbuf.st_size);
+                                    free(buf);
+
+                                    res = close(fd);
+                                } else {
+                                    int fd = open(backuppath, O_RDONLY | O_CREAT, 0777);
+                                    res = close(fd);
+                                }
+                                if (res) {
+                                    printf("create_backup: Error while writing to backup, code %d\n", errno);
+                                }
+
+                                //backup xattrs
+                                int size = listxattr(entrpath, 0, 0);
+                                if (size > 0) {
+                                    char* list = malloc(size);
+                                    if (list) {
+                                        listxattr(entrpath, list, size);
+                                        int sum = 0;
+                                        char *s = list;
+                                        while (sum < size) {
+                                            sum += strlen(s)+1;
+                                            if (s) {
+                                                int psize = getxattr(entrpath, s, 0, 0);
+                                                char *buf = malloc(psize);
+                                                if (buf) {
+                                                    getxattr(entrpath, s, buf, psize);
+                                                    res = setxattr(backuppath, s, buf, psize, 0);
+                                                    if (res) {
+                                                        printf("create_backup: Error while setting xattr in backup, code %d\n", errno);
+                                                    }
+
+                                                    free(buf);
+                                                }
+                                            }
+                                            s = strchr(s, '\0');
+                                            s++;
+                                        }
+                                        free(list);
+                                    }
+                                }
+
+                                memset(&stbuf, 0, sizeof(stbuf));
+                                free(entrpath);
+                                free(backuppath);
+                            }
                         }
                     }
+                    closedir(imfd);
                 }
-                closedir(imfd);
+                free(strino);
+                free(filepath);
             }
-            free(strino);
-            free(filepath);
         }
+    } else {
+        printf("Couldn't access backup directory %s with error code %d, backup skipped\n", root, errno);
     }
 }
 
