@@ -453,8 +453,6 @@ void refresh_imports() {
                 fatal_error("refresh_imports: Couldn't allocate memory");
             }
             fclose(fptr);
-        } else {
-            fatal_error("refresh_imports: imports.txt not found\n");
         }
     } else {
         fatal_error("refresh_imports: Couldn't allocate memory");
