@@ -16,10 +16,10 @@ struct dirbuf {
 	off_t size;
 };
 
-static void smt_destroy(void *userdata);
-int recursive_dir(ino_t dirino, ino_t ino);
 struct smtfs_config config;
 pthread_t refresh_thread;
+static void smt_destroy(void *userdata);
+int recursive_dir(ino_t dirino, ino_t ino);
 
 void fatal_error(const char *message) {
     puts(message);
@@ -39,6 +39,7 @@ void smtfs_setup() {
     //create system directories
     char *root = strdup("/");
     add_sysdirs(root, S_IFDIR | 0777);
+    add_opendir(ROOT); //load root into cache immediately
 
     char *tags = strdup(TAGS_FN);
     add_sysdirs(tags, S_IFDIR | 0777);
@@ -50,7 +51,7 @@ void smtfs_setup() {
     add_filetodir(root, FILES);
     free(files);
 
-    char *home = strdup("_Home");
+    char *home = strdup(HOME_FN);
     add_sysdirs(home, S_IFDIR | 0777);
     add_filetodir(root, HOME);
     free(home);
@@ -306,6 +307,7 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
         struct dirent *entry = NULL;
         struct stat stbuf;
         memset(&stbuf, 0, sizeof(stbuf));
+
         while ((entry = readdir(imfd)) != NULL) {
             char *entrpath = malloc(PATH_MAX);
             if (entrpath) {
@@ -337,15 +339,48 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
 
                                 append_dir_contents(TAGS, ino);
                                 set_file_xattr(ino, TAGS_FN, ADD);
+
+                                append_dir_contents(parent, ino);
+                                set_file_xattr(ino, parentname, ADD);
                             } else {
                                 struct dirinfo *dir = kh_val(dirh, k);
                                 ino = dir->ino;
+
+                                //check if it's been added to a new directory
+                                int size = listxattr(entrpath, 0, 0);
+                                if (size > 0) {
+                                    char* list = malloc(size);
+                                    if (list) {
+                                        listxattr(entrpath, list, size);
+                                        int sum = 0;
+                                        char *s = list;
+                                        char *p;
+                                        while (sum < size) {
+                                            p = strstr(s, "user.smtfs.");
+                                            if (p) {
+                                                p = p + strlen("user.smtfs.");
+                                                khint_t k = kh_get(dirhash, dirh, p);
+                                                if (k != kh_end(dirh)) {
+                                                    struct dirinfo *dir = kh_val(dirh, k);
+                                                    if (dir->ino == parent) {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            sum += strlen(s)+1;
+                                            s = strchr(s, '\0');
+                                            s++;
+                                        }
+                                        if (sum >= size) {
+                                            append_dir_contents(parent, ino);
+                                            set_file_xattr(ino, parentname, ADD);
+                                        }
+                                    }
+                                    free(list);
+                                }
                             }
 
                             refresh_importdir(entrpath, ino, entry->d_name);
-
-                            append_dir_contents(parent, ino);
-                            set_file_xattr(ino, parentname, ADD);
 
                             closedir(imfd);
                         }
@@ -370,10 +405,19 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                             if (stpath) {
                                 struct stat stbuf;
                                 memset(&stbuf, 0, sizeof(stbuf));
+
                                 lstat(stpath, &stbuf);
                                 if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                                    unlink(stpath);
-                                    create_symlink(ino, entry->d_name, entrpath);
+                                    memset(&stbuf, 0, sizeof(stbuf));
+
+                                    int res = stat(stpath, &stbuf);
+                                    if (res && errno == ENOENT) {
+                                        unlink(stpath);
+                                        create_symlink(ino, entry->d_name, entrpath);
+
+                                        free(stpath);
+                                        stpath = entrpath;
+                                    }
 
                                     int size = listxattr(entrpath, 0, 0);
                                     if (size > 0) {
@@ -384,7 +428,6 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                                             char *s = list;
                                             char *p;
                                             while (sum < size) {
-                                                sum += strlen(s)+1;
                                                 p = strstr(s, "user.smtfs.");
                                                 if (p) {
                                                     p = p + strlen("user.smtfs.");
@@ -396,6 +439,7 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
                                                         }
                                                     }
                                                 }
+                                                sum += strlen(s)+1;
                                                 s = strchr(s, '\0');
                                                 s++;
                                             }

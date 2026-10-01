@@ -236,7 +236,7 @@ int add_filetodir(const char *dirname, ino_t fileino) {
             i = insert_ino(opendir->fileinos, fileino);
 
             if (i) {
-                k = kh_get(openfilehash, fcache, dir->ino);
+                k = add_openfile(dir->ino);
                 if (k != kh_end(fcache)) {
                     struct openfileinfo *f1 = kh_value(fcache, k);
                     clock_gettime(CLOCK_REALTIME, &f1->ctime);
@@ -245,7 +245,7 @@ int add_filetodir(const char *dirname, ino_t fileino) {
             }
         } else {
             int res = append_dir_contents(dir->ino, fileino);
-            if (res > 0) {
+            if (!res) {
                 i = fileino;
             }
         }
@@ -278,7 +278,6 @@ int add_filetodir(const char *dirname, ino_t fileino) {
             return ENOMEM;
         }
     }
-
     return ENOENT;
 }
 
@@ -536,8 +535,6 @@ khint_t add_openfile(ino_t ino) {
         return k;
     }
 
-    //printf("add_openfile: %ld\n", ino);
-
     struct openfileinfo *f = malloc(sizeof(struct openfileinfo));
     f->ino = ino;
     f->fd = 0;
@@ -573,6 +570,16 @@ khint_t add_openfile(ino_t ino) {
         f->ctime = stbuf.st_ctim;
         f->btime.tv_sec = stxbuf.stx_btime.tv_sec;
         f->btime.tv_nsec = stxbuf.stx_btime.tv_nsec;
+
+        if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+            free(filepath);
+            filepath = get_contents_path(config.storage, ino);
+            if (filepath) {
+                memset(&stbuf, 0, sizeof(stbuf));
+                stat(filepath, &stbuf);
+                f->mtime = stbuf.st_mtim;
+            }
+        }
 
         f->dirinos = malloc(sizeof(struct inoarr));
         f->dirinos->inos = malloc(sizeof(ino_t)*2);
@@ -744,11 +751,11 @@ void remove_opendir(ino_t ino, int sys_running) {
         struct opendirinfo *opendir = kh_val(opendirh, k);
         lvisit.currindex = opendir->index;
 
-        write_dir_contents(ino, opendir->fileinos);
+        write_dir_contents(ino, opendir->fileinos, 0);
 
-        for (int i = 0; i < opendir->fileinos->size; i++) {
+        /*for (int i = 0; i < opendir->fileinos->size; i++) {
             remove_openfile(opendir->fileinos->inos[i], sys_running);
-        }
+        }*/
 
         free(opendir->fileinos->inos);
         free(opendir->fileinos);

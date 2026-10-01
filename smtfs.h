@@ -22,11 +22,11 @@
 #define MAX_OPEN 50        //max cached directories
 #define MAX_FILENAME 256
 #define DIRSPLIT 10000     //used in calculating storage path
-#define REFRESH_PERIOD 300 //cache refresh
+#define REFRESH_PERIOD 300 //cache refresh period
 
 #define ADD 1 //add xattr
 #define RMV 0 //remove xattr
-#define RUNNING 1 //passed to remove_opendir/remove_openfile
+#define RUNNING 1 //passed to remove_opendir/remove_openfile by default
 #define STOP 0 //passed to remove_opendir/remove_openfile if in smt_destroy
 
 //system directories
@@ -51,33 +51,33 @@
 #define min(x, y) ((x) < (y) ? (x) : (y))
 #define max(x, y) ((x) > (y) ? (x) : (y))
 
-//all configuration
+//all configuration upon fuse startup, passed to smt_init
 struct fuse_smt_userdata {
     int refresh; //unused
-    int passthrough;
-    int dump;
-    int root_fd;
-    dev_t dev;
-    blksize_t blksize;
-    char *devfile;
-    char *clear;
-    char *import;
-    char *storage;
-    char *backup;
+    int passthrough; //-p option
+    int dump; //--dump option
+    int root_fd; //file descriptor of root, for smt_statfs
+    dev_t dev; //dev of root
+    blksize_t blksize; //blksize of root
+    char *devfile; //path of mountpoint/root
+    char *clear; //-o clear= option
+    char *import; //-o import= option
+    char *storage; //root of storage
+    char *backup; //root of backup
 };
 
-//configuration used after mounting
+//configuration used while running
 struct smtfs_config {
-    int passthrough;
-    int root_fd;
-    dev_t dev;
-    blksize_t blksize;
+    int passthrough; //-p option
+    int root_fd; //file descriptor of root, for smt_statfs
+    dev_t dev; //dev of root
+    blksize_t blksize; //blksize of root
     ino_t used; //used inode count
     int errcount; //error count since mounting
-    char *errpath;
-    char *devfile;
-    char *storage;
-    char *backup;
+    char *errpath; //directory for error logging
+    char *devfile; //path of mountpoint/root
+    char *storage; //root of storage
+    char *backup; //root of backup
 };
 
 extern struct smtfs_config config;
@@ -101,9 +101,9 @@ extern khash_t(dirhash) *dirh;
 
 //dynamic inode array
 struct inoarr {
-    ino_t *inos;
-    int size;
-    int exp; //exponent of 2
+    ino_t *inos; //inode array
+    int size; //number of inodes
+    int exp; //exponent of 2 for array resizing
 };
 
 //file cache
@@ -196,8 +196,9 @@ void remove_opendir(ino_t ino, int sys_running);
 ino_t dirset(const char *name, const char *pos);
 
 //smtfs_disk.c
-char* get_ino_path(char *root, ino_t ino); //storageroot/(ino/DIRSPLIT)/ino
-char* get_file_path(char *root, char *filename); //storageroot/filename
+char* get_ino_path(char *root, ino_t ino); // "root/(ino/DIRSPLIT)/ino"
+char* get_file_path(char *root, char *filename); // "root/filename"
+char* get_contents_path(char *root, ino_t ino); // "root/(ino/DIRSPLIT)/ino/contents.txt"
 
 void create_backup(char *root);
 
@@ -213,7 +214,7 @@ void rename_symlink(ino_t ino, char *newname);
 
 int write_dirinos_into_file(char *root, char *filename);
 int write_freemap_into_file(char *root, char *filename);
-int write_dir_contents(ino_t dirino, struct inoarr *fileinos);
+int write_dir_contents(ino_t dirino, struct inoarr *fileinos, int errnum);
 int append_dir_contents(ino_t dirino, ino_t fileino);
 
 void remove_xattr_from_dir(char *dirpath);
