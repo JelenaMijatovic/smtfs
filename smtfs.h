@@ -80,14 +80,16 @@ struct smtfs_config {
     char *backup; //root of backup
 };
 
+//smtfs_fuse.h
 extern struct smtfs_config config;
 
 //freemap
 struct freeino {
-    ino_t ino; //first free inode
-    struct freeino *nextfr; //free inode list
+    ino_t ino; //free inode
+    struct freeino *nextfr; //next free inode
 };
 
+//smtfs_data.h
 extern struct freeino *freemap;
 
 //directory name hashmap
