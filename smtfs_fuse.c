@@ -165,19 +165,16 @@ int is_import_new(char* importroot) {
 }
 
 void read_importdir(char* path, DIR *imfd, ino_t parent, char* parentname) {
+
     struct dirent *entry = NULL;
     struct stat stbuf;
     memset(&stbuf, 0, sizeof(stbuf));
+
     while ((entry = readdir(imfd)) != NULL) {
-        char *entrpath = malloc(PATH_MAX);
+        char *entrpath = get_file_path(path, entry->d_name);
         if (entrpath) {
-            entrpath[0] = '\0';
-            strcat(entrpath, path);
-
-            strcat(entrpath, "/");
-            strcat(entrpath, entry->d_name);
-
             stat(path, &stbuf);
+
             if (strncmp(entry->d_name, ".", strlen(entry->d_name)) && strncmp(entry->d_name, "..", strlen(entry->d_name))) {
                 ino_t ino;
                 if (entry->d_type == DT_DIR) {
@@ -309,15 +306,10 @@ void refresh_importdir(char* path, ino_t parent, char* parentname) {
         memset(&stbuf, 0, sizeof(stbuf));
 
         while ((entry = readdir(imfd)) != NULL) {
-            char *entrpath = malloc(PATH_MAX);
+            char *entrpath = get_file_path(path, entry->d_name);
             if (entrpath) {
-                entrpath[0] = '\0';
-                strcat(entrpath, path);
-
-                strcat(entrpath, "/");
-                strcat(entrpath, entry->d_name);
-
                 stat(path, &stbuf);
+
                 if (strncmp(entry->d_name, ".", strlen(entry->d_name)) && strncmp(entry->d_name, "..", strlen(entry->d_name))) {
                     ino_t ino;
                     if (entry->d_type == DT_DIR) {
@@ -501,16 +493,13 @@ void refresh_imports() {
     } else {
         fatal_error("refresh_imports: Couldn't allocate memory");
     }
+
     for (int i = 0; i <= 99; i++) {
-        char *filepath = malloc(PATH_MAX);
+        int length = snprintf(NULL, 0, "%s/%d", config.storage, i);
+        char *filepath = malloc(length+1);
         if (filepath) {
-            filepath[0] = '\0';
-            strcat(filepath, config.storage);
-            int length = snprintf(NULL, 0, "/%d", i);
-            char *strino = malloc(length+1);
-            sprintf(strino, "/%d", i);
-            strcat(filepath, strino);
-            free(strino);
+            snprintf(filepath, length+1, "%s/%d", config.storage, i);
+
             DIR *imfd = opendir(filepath);
             if (imfd) {
                 struct dirent *entry = NULL;
@@ -518,15 +507,10 @@ void refresh_imports() {
                 memset(&stbuf, 0, sizeof(stbuf));
                 while ((entry = readdir(imfd)) != NULL) {
                     if (strncmp(entry->d_name, ".", 1)) {
-                        char *entrpath = malloc(PATH_MAX);
+                        char *entrpath = get_file_path(filepath, entry->d_name);
                         if (entrpath) {
-                            entrpath[0] = '\0';
-                            strcat(entrpath, filepath);
-
-                            strcat(entrpath, "/");
-                            strcat(entrpath, entry->d_name);
-
                             lstat(entrpath, &stbuf);
+
                             if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
                                 char *buf = malloc(stbuf.st_size+1);
                                 if (buf) {
@@ -779,15 +763,10 @@ void refreshdir(ino_t ino) {
                 if (node->nextfr) {
                     struct freeino *prev = NULL;
                     while (node) {
-                        char *newname;
-                        int length = snprintf(NULL, 0, "%ld", node->ino);
-                        char app[length+1];
-                        if ((newname = malloc(strlen(name) + length + 2)) != NULL) {
-                            newname[0] = '\0';
-                            sprintf(app, "%ld", node->ino);
-                            strcat(newname, name);
-                            strcat(newname, ":");
-                            strcat(newname, app);
+                        int length = snprintf(NULL, 0, "%s:%ld", name, node->ino);
+                        char *newname = malloc(length+1);
+                        if (newname) {
+                            snprintf(newname, length+1, "%s:%ld", name, node->ino);
 
                             insert_fname(opendir->filenames, newname, node->ino);
 
@@ -1882,23 +1861,18 @@ int main(int argc, char **argv) {
     conf.dev = stbuf.st_dev;
     conf.blksize = stbuf.st_blksize;
 
-    char *storage = malloc(PATH_MAX);
-    char *backup = malloc(PATH_MAX);
     char *dirpath = dirname(strdup(conf.devfile));
+    int slength = snprintf(NULL, 0, "%s/.smtfs_%s_storage", dirpath, basename(conf.devfile));
+    char *storage = malloc(slength+1);
+    int blength = snprintf(NULL, 0, "%s/.smtfs_%s_backup", dirpath, basename(conf.devfile));
+    char *backup = malloc(blength+1);
+
     if (storage && backup && dirpath) {
-        storage[0] = '\0';
-        strcat(storage, dirpath);
-        strcat(storage, "/.smtfs_");
-        strcat(storage, basename(conf.devfile));
-        strcat(storage, "_storage");
+        snprintf(storage, slength+1, "%s/.smtfs_%s_storage", dirpath, basename(conf.devfile));
         mkdir(storage, 0700);
         conf.storage = storage;
 
-        backup[0] = '\0';
-        strcat(backup, dirpath);
-        strcat(backup, "/.smtfs_");
-        strcat(backup, basename(conf.devfile));
-        strcat(backup, "_backup");
+        snprintf(backup, blength+1, "%s/.smtfs_%s_backup", dirpath, basename(conf.devfile));
         mkdir(backup, 0700);
         conf.backup = backup;
     } else {

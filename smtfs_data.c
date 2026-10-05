@@ -700,13 +700,12 @@ khint_t add_opendir(ino_t ino) {
                     dir->filenames->exp = 2;
 
                     //load directory contents
-                    char *filepath = get_ino_path(config.storage, ino);
+                    char *filepath = get_contents_path(config.storage, ino);
                     if (filepath) {
-                        strcat(filepath, "/contents.txt");
-
                         FILE *fptr;
                         fptr = fopen(filepath, "r");
                         free(filepath);
+
                         if (fptr) {
                             ino_t fino;
                             while (fscanf(fptr, "%lu\n", &fino) != EOF) {
