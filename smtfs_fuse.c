@@ -17,7 +17,7 @@ void smtfs_setup() {
     config.used = 0;
 
     //create system directories
-    char *root = strdup("/");
+    char *root = strdup(ROOT_FN);
     add_sysdirs(root, S_IFDIR | 0777);
     add_opendir(ROOT); //load root into cache immediately
 

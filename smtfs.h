@@ -18,16 +18,18 @@
 #include <unistd.h>
 
 #define MAX_FILES 1000000  //max files for an smtfs instance
+#define DIRSPLIT 10000     //split files into subdirectories with DIRSPLIT files each on disk
 #define MAX_DIRSIZE 10000  //max files to load into cache preemptively per directory
 #define MAX_OPEN 50        //max cached directories
-#define MAX_FILENAME 256
-#define DIRSPLIT 10000     //used in calculating storage path
 #define REFRESH_PERIOD 300 //cache refresh period
 
+//flags for set_file_xattr
 #define ADD 1 //add xattr
 #define RMV 0 //remove xattr
-#define RUNNING 1 //passed to remove_opendir/remove_openfile by default
-#define STOP 0 //passed to remove_opendir/remove_openfile if in smt_destroy
+
+//flags for remove_opendir and remove_openfile
+#define RUNNING 1 //files flushed while system is running
+#define STOP 0    //files flushed during shutdown process
 
 //system directories
 #define ROOT 1
@@ -51,67 +53,66 @@
 #define min(x, y) ((x) < (y) ? (x) : (y))
 #define max(x, y) ((x) > (y) ? (x) : (y))
 
-//all configuration upon fuse startup, passed to smt_init
+//configuration passed from mount arguments to smt_init
 struct fuse_smt_userdata {
-    int refresh; //unused
-    int passthrough; //-p option
-    int dump; //--dump option
-    int root_fd; //file descriptor of root, for smt_statfs
-    dev_t dev; //dev of root
-    blksize_t blksize; //blksize of root
-    char *devfile; //path of mountpoint/root
-    char *clear; //-o clear= option
-    char *import; //-o import= option
-    char *storage; //root of storage
-    char *backup; //root of backup
+    int refresh;       //unused
+    int passthrough;   //-p option
+    int dump;          //--dump option
+    char *clear;       //-o clear= option
+    char *import;      //-o import= option
+    char *devfile;     //path of mountpoint
+    int root_fd;       //file descriptor of mountpoint, for smt_statfs
+    dev_t dev;         //dev of mountpoint
+    blksize_t blksize; //blksize of mountpoint
+    char *storage;     //root of storage
+    char *backup;      //root of backup
 };
 
-//configuration used while running
+//global configuration, set in smt_init
 struct smtfs_config {
-    int passthrough; //-p option
-    int root_fd; //file descriptor of root, for smt_statfs
-    dev_t dev; //dev of root
-    blksize_t blksize; //blksize of root
-    ino_t used; //used inode count
-    int errcount; //error count since mounting
-    char *errpath; //directory for error logging
-    char *devfile; //path of mountpoint/root
-    char *storage; //root of storage
-    char *backup; //root of backup
+    int passthrough;   //-p option
+    char *devfile;     //path of mountpoint
+    int root_fd;       //file descriptor of mountpoint, for smt_statfs
+    dev_t dev;         //dev of mountpoint
+    blksize_t blksize; //blksize of mountpoint
+    char *storage;     //root of storage
+    char *backup;      //root of backup
+    long int used;     //used inode count
+    long int errcount; //error count since mounting
+    char *errpath;     //directory for error logging
 };
 
-//smtfs_fuse.h
-extern struct smtfs_config config;
+extern struct smtfs_config config; //in smtfs_fuse.h
 
 //freemap
 struct freeino {
-    ino_t ino; //free inode
+    ino_t ino;              //free inode
     struct freeino *nextfr; //next free inode
 };
 
-//smtfs_data.h
-extern struct freeino *freemap;
+extern struct freeino *freemap; //in smtfs_data.h
 
-//directory name hashmap
+//struct for dirhash
 struct dirinfo {
     ino_t ino;
     char *name;
 };
 
+//directory name->ino hashmap
 KHASH_MAP_INIT_STR(dirhash, struct dirinfo*)
-extern khash_t(dirhash) *dirh;
+extern khash_t(dirhash) *dirh; //in smtfs_data.h
 
 //dynamic inode array
 struct inoarr {
     ino_t *inos; //inode array
-    int size; //number of inodes
-    int exp; //exponent of 2 for array resizing
+    int size;    //number of inodes
+    int exp;     //exponent of 2 for array resizing
 };
 
-//file cache
+//file info
 struct openfileinfo {
     ino_t ino;
-    int fd; //file handle upon file creation for diagnostics
+    int fd;                 //file descriptor made upon file creation, for diagnostics
     char *name;
     off_t size;
     mode_t mode;
@@ -123,15 +124,16 @@ struct openfileinfo {
     struct timespec mtime;
     struct timespec ctime;
     struct timespec btime;
-    struct inoarr *dirinos; //inodes of tags/directories containing this file
-    int nref; //open references to file
-    time_t visit; //last lookup timestamp
+    struct inoarr *dirinos; //inodes of directories containing this file
+    int nref;               //number of open file descriptors
+    time_t visit;           //last lookup timestamp
 };
 
-//inode hashmap for file cache
+//inode->file info hashmap
 KHASH_MAP_INIT_INT(openfilehash, struct openfileinfo*)
-extern khash_t(openfilehash) *fcache;
+extern khash_t(openfilehash) *fcache; //in smtfs_data.h
 
+//directory entry
 struct opendirentry {
     ino_t ino;
     char *name; //filename will be modified to be unique in directory if there are duplicates
@@ -140,35 +142,35 @@ struct opendirentry {
 //dynamic array of directory entries
 struct strarr {
     struct opendirentry *entries;
-    int size;
-    int exp;
+    int size; //number of entries
+    int exp;  //exponent of 2 for array resizing
 };
 
-//directory cache
+//directory info
 struct opendirinfo {
-    int openref; //non-zero if there are open handles
-    int index; //index of own entry in visits
-    struct inoarr *fileinos; //inodes of contained files
+    int openref;              //non-zero if there are open handles
+    int index;                //index of own entry in visits
+    struct inoarr *fileinos;  //inodes of contained files
     struct strarr *filenames; //filenames of contained files with modifications for duplicates
 };
 
-//inode hashmap for directory cache
+//inode->directory info hashmap
 KHASH_MAP_INIT_INT(opendirhash, struct opendirinfo*)
-extern khash_t(opendirhash) *opendirh;
+extern khash_t(opendirhash) *opendirh; //in smtfs_data.h
 
-//last visit timestamp and inode
+//last visit timestamp for directory with inode ino
 struct vst {
     time_t visit;
     ino_t ino;
 };
 
-//array of last visit timestamps for cached directories
+//array of last visit timestamps for directories loaded into memory
 struct last_visited {
-    int currindex; //first unused index
-    struct vst *visits; //length MAX_OPEN
+    int currindex;      //first unused index
+    struct vst *visits; //array of length MAX_OPEN
 };
 
-extern struct last_visited lvisit;
+extern struct last_visited lvisit; //in smtfs_data.h
 
 //smtfs_data.c
 int find_ino_pos(struct inoarr *inos, ino_t ino);
@@ -198,9 +200,9 @@ void remove_opendir(ino_t ino, int sys_running);
 ino_t dirset(const char *name, const char *pos);
 
 //smtfs_disk.c
-char* get_ino_path(char *root, ino_t ino); // "root/(ino/DIRSPLIT)/ino"
+char* get_ino_path(char *root, ino_t ino);       // "root/(ino/DIRSPLIT)/ino"
 char* get_file_path(char *root, char *filename); // "root/filename"
-char* get_contents_path(char *root, ino_t ino); // "root/(ino/DIRSPLIT)/ino/contents.txt"
+char* get_contents_path(char *root, ino_t ino);  // "root/(ino/DIRSPLIT)/ino/contents.txt"
 
 void create_backup(char *root);
 
