@@ -349,6 +349,7 @@ int add_sysdirs(const char *name, mode_t mode) {
             clock_gettime(CLOCK_REALTIME, &f->ctime);
             clock_gettime(CLOCK_REALTIME, &f->btime);
             f->nref = 0;
+            f->visit = time(NULL);
 
             int absent;
             khint_t k = kh_put(openfilehash, fcache, f->ino, &absent);
@@ -402,7 +403,7 @@ ino_t add_file(const char *name, mode_t mode, off_t size) {
             f->uid = 0;
             f->gid = 0;
             f->size = size;
-            f->blocks = config.blksize/512;
+            f->blocks = size/512;
             f->mode = mode;
             if ((mode & S_IFMT) == S_IFDIR) {
                 f->nlink = 1;
@@ -410,6 +411,7 @@ ino_t add_file(const char *name, mode_t mode, off_t size) {
                 f->nlink = 0;
             }
             f->nref = 0;
+            f->visit = time(NULL);
             f->dirinos = malloc(sizeof(struct inoarr));
             f->dirinos->inos = malloc(sizeof(ino_t)*2);
             memset(f->dirinos->inos, 0x0, sizeof(ino_t)*2);
