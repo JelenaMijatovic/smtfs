@@ -1,7 +1,9 @@
 #include "smtfs.h"
 #include "smtfs_fuse.h"
 
+//print message, clean up and exit
 void fatal_error(const char *message) {
+
     puts(message);
     smt_destroy(NULL);
     exit(1);
@@ -17,26 +19,17 @@ void smtfs_setup() {
     config.used = 0;
 
     //create system directories
-    char *root = strdup(ROOT_FN);
-    add_sysdirs(root, S_IFDIR | 0777);
-    add_opendir(ROOT); //load root into cache immediately
+    add_sysdirs(ROOT_FN, S_IFDIR | 0777);
+    add_opendir(ROOT); //load root into memory immediately
 
-    char *tags = strdup(TAGS_FN);
-    add_sysdirs(tags, S_IFDIR | 0777);
-    add_filetodir(root, TAGS);
-    free(tags);
+    add_sysdirs(TAGS_FN, S_IFDIR | 0777);
+    add_filetodir(ROOT_FN, TAGS);
 
-    char *files = strdup(FILES_FN);
-    add_sysdirs(files, S_IFDIR | 0777);
-    add_filetodir(root, FILES);
-    free(files);
+    add_sysdirs(FILES_FN, S_IFDIR | 0777);
+    add_filetodir(ROOT_FN, FILES);
 
-    char *home = strdup(HOME_FN);
-    add_sysdirs(home, S_IFDIR | 0777);
-    add_filetodir(root, HOME);
-    free(home);
-
-    free(root);
+    add_sysdirs(HOME_FN, S_IFDIR | 0777);
+    add_filetodir(ROOT_FN, HOME);
 }
 
 //run on subsequent mounts
