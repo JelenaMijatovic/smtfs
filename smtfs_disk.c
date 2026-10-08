@@ -96,13 +96,17 @@ void create_backup(char *root) {
                                 bktime = stbuf.st_mtim.tv_sec;
 
                                 if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
-                                    char *contpaths = get_file_path(bfilepath, "/contents.txt");
+                                    char *bcontpaths = get_file_path(bfilepath, "/contents.txt");
 
                                     memset(&stbuf, 0, sizeof(stbuf));
-                                    lstat(contpaths, &stbuf);
-                                    bktime = stbuf.st_mtim.tv_sec;
+                                    res = lstat(bcontpaths, &stbuf);
+                                    if (res && errno == ENOENT) {
+                                        bktime = 0;
+                                    } else {
+                                        bktime = stbuf.st_mtim.tv_sec;
+                                    }
 
-                                    free(contpaths);
+                                    free(bcontpaths);
                                 }
                                 memset(&stbuf, 0, sizeof(stbuf));
 
@@ -118,10 +122,10 @@ void create_backup(char *root) {
                                             memset(&stbuf, 0, sizeof(stbuf));
                                             lstat(fcontpaths, &stbuf);
 
-                                            if (stbuf.st_mtim.tv_sec > bktime) {
+                                            if (stbuf.st_mtim.tv_sec > bktime && bktime != 0) {
                                                 res = remove(bcontpaths);
                                                 if (res) {
-                                                    printf("create_backup: Error while deleting previous backup file %s, code %d\n", entry->d_name, errno);
+                                                    printf("create_backup: Error while deleting previous backup contents file %s, code %d\n", entry->d_name, errno);
                                                 }
                                             }
 
@@ -603,7 +607,6 @@ int write_dir_contents(ino_t dirino, struct inoarr *fileinos, int errnum) {
                 }
                 res = close(newfd);
                 err = errno;
-                printf("res %d %d\n", res, err);
             }
         }
         free(filepath);
@@ -619,11 +622,10 @@ int write_dir_contents(ino_t dirino, struct inoarr *fileinos, int errnum) {
 
 int append_dir_contents(ino_t dirino, ino_t fileino) {
 
-    char *filepath = get_ino_path(config.storage, dirino);
+    char *filepath = get_contents_path(config.storage, dirino);
     int res = -1;
 
     if (filepath) {
-        strcat(filepath, "/contents.txt");
 
         int newfd = open(filepath, O_WRONLY | O_APPEND | O_CREAT, 0777);
         if (newfd > -1) {
