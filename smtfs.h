@@ -204,6 +204,8 @@ char* get_ino_path(char *root, ino_t ino);       // "root/(ino/DIRSPLIT)/ino"
 char* get_file_path(char *root, char *filename); // "root/filename"
 char* get_contents_path(char *root, ino_t ino);  // "root/(ino/DIRSPLIT)/ino/contents.txt"
 
+void add_import(char* importdir);
+void refresh_imports();
 void create_backup(char *root);
 
 void* get_xattr_from_file(ino_t ino, char *name);
