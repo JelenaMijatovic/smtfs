@@ -216,8 +216,11 @@ void delete_file_on_disk(ino_t ino, mode_t mode);
 void create_symlink(ino_t ino, char *name, char *target);
 void rename_symlink(ino_t ino, char *newname);
 
-int write_dirinos_into_file(char *root, char *filename);
-int write_freemap_into_file(char *root, char *filename);
+int save_dirinos(char *root, char *filename);
+void load_dirinos();
+int save_freemap(char *root, char *filename);
+void load_freemap();
+
 int write_dir_contents(ino_t dirino, struct inoarr *fileinos, int errnum);
 int append_dir_contents(ino_t dirino, ino_t fileino);
 

@@ -34,73 +34,18 @@ void smtfs_setup() {
 
 //run on subsequent mounts
 void smtfs_load() {
-    khint_t k;
-    int absent;
 
     //check if error directory is present
     char* path = get_file_path(config.storage, "/ERR");
     if (path) {
-        //!repair errors <- separate option
+        //!repair errors
         //remove(path);
         free(path);
     }
 
-    //load data into freemap
-    path = get_file_path(config.storage, "/free.txt");
-    if (path) {
-        FILE *fptr;
-        fptr = fopen(path, "r");
-        if (fptr) {
-            ino_t ino;
-            struct freeino *prev = malloc(sizeof(struct freeino));
+    load_freemap(); //load data into freemap
 
-            fscanf(fptr, "%lu\n", &config.used);
-            //at least one free inode (the first) is always present
-            fscanf(fptr, "%lu\n", &prev->ino);
-            freemap = prev;
-
-            struct freeino *curr = NULL;
-            while (fscanf(fptr, "%lu\n", &ino) != EOF) {
-                curr = malloc(sizeof(struct freeino));
-                curr->ino = ino;
-                prev->nextfr = curr;
-                prev = curr;
-            }
-            prev->nextfr = NULL;
-
-            fclose(fptr);
-        } else {
-            fatal_error("smtfs_load: Couldn't read free.txt!");
-        }
-        free(path);
-    } else {
-        fatal_error("smtfs_load: Couldn't allocate memory");
-    }
-
-    //load data into dirhash
-    path = get_file_path(config.storage, "/dirs.txt");
-    if (path) {
-        FILE *fptr;
-        fptr = fopen(path, "r");
-        if (fptr) {
-            ino_t ino;
-
-            while (fscanf(fptr, "%lu\n", &ino) != EOF) {
-                struct dirinfo *dir = malloc(sizeof(struct dirinfo));
-                dir->ino = ino;
-                dir->name = get_xattr_from_file(ino, "user.smtfs_m.name");
-                k = kh_put(dirhash, dirh, dir->name, &absent);
-                kh_val(dirh, k) = dir;
-            }
-
-            fclose(fptr);
-        } else {
-            fatal_error("smtfs_load: Couldn't read dirs.txt!");
-        }
-        free(path);
-    } else {
-        fatal_error("smtfs_load: Couldn't allocate memory");
-    }
+    load_dirinos(); //load data into dirhash
 }
 
 int is_import_new(char* importroot) {
@@ -607,7 +552,7 @@ static void smt_destroy(void *userdata) {
     free(lvisit.visits);
 
     //save directory inodes into dirs.txt
-    write_dirinos_into_file(config.storage, "/dirs.txt");
+    save_dirinos(config.storage, "/dirs.txt");
 
     //clear dirhash
     for (khint_t k = 0; k < kh_end(dirh); ++k)
@@ -626,7 +571,7 @@ static void smt_destroy(void *userdata) {
     kh_destroy(openfilehash, fcache);
 
     //save freemap
-    write_freemap_into_file(config.storage, "/free.txt");
+    save_freemap(config.storage, "/free.txt");
 
     //clear freemap
     struct freeino *curr = freemap;

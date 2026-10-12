@@ -451,7 +451,7 @@ void rename_symlink(ino_t ino, char* newname) {
 //root: parent directory of file to write into
 //filename: base name of file to write directory inodes into.
 //returns 0 on success, nonzero on failure
-int write_dirinos_into_file(char *root, char *filename) {
+int save_dirinos(char *root, char *filename) {
 
     char *filepath;
     if (!strncmp(root, config.errpath, strlen(config.errpath))) {
@@ -489,17 +489,48 @@ int write_dirinos_into_file(char *root, char *filename) {
     }
 
     if (res && strncmp(root, config.errpath, strlen(config.errpath))) {
-        printf("write_dirinos_into_file: Failed to write directory inodes into file %s, code %d. Logging error...\n", filename, err);
+        printf("save_dirinos: Failed to write directory inodes into file %s, code %d. Logging error...\n", filename, err);
         write_error_file(0, DIRINOERR, NULL);
     }
 
     return res;
 }
 
-//root: parent directory of file to write into
-//filename: base name of file to write free inodes into.
-//returns 0 on success, nonzero on failure
-int write_freemap_into_file(char *root, char *filename) {
+void load_dirinos() {
+
+    khint_t k;
+    int absent;
+
+    char *path = get_file_path(config.storage, "/dirs.txt");
+    if (path) {
+        FILE *fptr;
+        fptr = fopen(path, "r");
+        if (fptr) {
+            ino_t ino;
+
+            while (fscanf(fptr, "%lu\n", &ino) != EOF) {
+                struct dirinfo *dir = malloc(sizeof(struct dirinfo));
+                dir->ino = ino;
+                dir->name = get_xattr_from_file(ino, "user.smtfs_m.name");
+                k = kh_put(dirhash, dirh, dir->name, &absent);
+                kh_val(dirh, k) = dir;
+            }
+
+            fclose(fptr);
+        } else {
+            fatal_error("load_dirinos: Couldn't read dirs.txt!");
+        }
+        free(path);
+    } else {
+        fatal_error("load_dirinos: Couldn't allocate memory");
+    }
+}
+
+/** root: parent directory of file to write into
+    filename: base name of file to write free inodes into.
+    format is (used inode count)\n(free inode)\n[free inode]...
+    returns 0 on success, nonzero on failure */
+int save_freemap(char *root, char *filename) {
 
     char *filepath;
     if (!strncmp(root, config.errpath, strlen(config.errpath))) {
@@ -545,11 +576,44 @@ int write_freemap_into_file(char *root, char *filename) {
     }
 
     if (res && strncmp(root, config.errpath, strlen(config.errpath))) {
-        printf("write_freemap_into_file: Failed to write freemap into file %s, code %d. Logging error...\n", filename, err);
+        printf("save_freemap: Failed to write freemap into file %s, code %d. Logging error...\n", filename, err);
         write_error_file(0, FREEMAPERR, NULL);
     }
 
     return res;
+}
+
+void load_freemap() {
+
+    char *path = get_file_path(config.storage, "/free.txt");
+    if (path) {
+        FILE *fptr;
+        fptr = fopen(path, "r");
+        if (fptr) {
+            ino_t ino;
+            struct freeino *prev = malloc(sizeof(struct freeino));
+
+            //at least one free inode (the first) is always present
+            fscanf(fptr, "%lu\n%lu\n", &config.used, &prev->ino);
+
+            freemap = prev;
+            struct freeino *curr = NULL;
+            while (fscanf(fptr, "%lu\n", &ino) != EOF) {
+                curr = malloc(sizeof(struct freeino));
+                curr->ino = ino;
+                prev->nextfr = curr;
+                prev = curr;
+            }
+            prev->nextfr = NULL;
+
+            fclose(fptr);
+        } else {
+            fatal_error("load_freemap: Couldn't read free.txt!");
+        }
+        free(path);
+    } else {
+        fatal_error("load_freemap: Couldn't allocate memory");
+    }
 }
 
 //dirino: inode of directory whose contents to write on disk, 0 when logging error
@@ -868,14 +932,14 @@ void write_error_file(ino_t ino, int errtype, void *data) {
                 }
                 case DIRINOERR: {
 
-                    int res3 = write_dirinos_into_file(config.errpath, 0);
+                    int res3 = save_dirinos(config.errpath, 0);
 
                     res = res1 | res2 | res3;
                     break;
                 }
                 case FREEMAPERR: {
 
-                    int res3 = write_freemap_into_file(config.errpath, 0);
+                    int res3 = save_freemap(config.errpath, 0);
 
                     res = res1 | res2 | res3;
                     break;
