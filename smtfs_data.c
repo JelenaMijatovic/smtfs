@@ -764,93 +764,187 @@ void remove_opendir(ino_t ino, int sys_running) {
     }
 }
 
-//set operations
-ino_t dirset(const char* name, const char *pos) {
+int dirset_check(char *query) {
 
-    char *dir1 = (char *)malloc((pos-name)+1);
-    strncpy(dir1, name, pos-name);
-    dir1[pos-name] = '\0';
-    char *dir2 = (char *)malloc(strlen(name)-(pos-name));
-    strncpy(dir2, name+(pos-name)+2, strlen(name)-(pos-name)-1);
-    dir2[strlen(name)-(pos-name)-1] = '\0';
-
-    struct dirinfo *di1 = NULL;
-    khint_t k = kh_get(dirhash, dirh, dir1);
-    if (k != kh_end(dirh)) {
-        di1 = kh_val(dirh, k);
-    }
-    struct dirinfo *di2 = NULL;
-    k = kh_get(dirhash, dirh, dir2);
-    if (k != kh_end(dirh)) {
-        di2 = kh_val(dirh, k);
-    }
-
-    k = add_opendir(di1->ino);
-    struct opendirinfo *d1 = kh_val(opendirh, k);
-    k = add_opendir(di2->ino);
-    struct opendirinfo *d2 = kh_val(opendirh, k);
-
-    free(dir1);
-    free(dir2);
-
-    if (d1 && d2) {
-        switch (name[(pos-name)+1]) {
-            case '&':{
-                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
-
-                        for (int i = 0; i < d1->fileinos->size; i++) {
-                            int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
-                            if (d2->fileinos->inos[pos] == d1->fileinos->inos[i]) {
-                                add_filetodir(name, d1->fileinos->inos[i]);
-                            }
-                        }
-
-                        return ino;
+    char *prev = query;
+    char *pos = strchr(query, '\\');
+    while (prev && *prev) {
+        if (pos) {
+            *pos = '\0';
+        }
+        khint_t k = kh_get(dirhash, dirh, prev);
+        if (k != kh_end(dirh)) {
+            if (pos) {
+                switch (pos[1]) {
+                    case '&': case '|': case '^': case '~':{
+                        break;
                     }
-            case '|':{
-                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
-
-                        for (int i = 0; i < d1->fileinos->size; i++) {
-                            add_filetodir(name, d1->fileinos->inos[i]);
-                        }
-                        for (int i = 0; i < d2->fileinos->size; i++) {
-                            add_filetodir(name, d2->fileinos->inos[i]);
-                        }
-
-                        return ino;
+                    default: {
+                        printf("dirset_check: Malformed set operation. Use one of the characters &, |, ^ or ~, and include only the base name of a directory.\n");
+                        return 1;
                     }
-            case '^':{
-                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
-
-                        for (int i = 0; i < d1->fileinos->size; i++) {
-                            int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
-                            if (d2->fileinos->inos[pos] != d1->fileinos->inos[i]) {
-                                add_filetodir(name, d1->fileinos->inos[i]);
-                            }
-                        }
-                        for (int i = 0; i < d2->fileinos->size; i++) {
-                            int pos = find_ino_pos(d1->fileinos, d2->fileinos->inos[i]);
-                            if (d1->fileinos->inos[pos] != d2->fileinos->inos[i]) {
-                                add_filetodir(name, d2->fileinos->inos[i]);
-                            }
-                        }
-
-                        return ino;
-                    }
-            case '~':{
-                        ino_t ino = add_file(name, S_IFDIR | 0777, config.blksize);
-
-                        for (int i = 0; i < d1->fileinos->size; i++) {
-                            int pos = find_ino_pos(d2->fileinos, d1->fileinos->inos[i]);
-                            if (d2->fileinos->inos[pos] != d1->fileinos->inos[i]) {
-                                add_filetodir(name, d1->fileinos->inos[i]);
-                            }
-                        }
-
-                        return ino;
-                    }
-            default: return 0;
+                }
+            }
+        } else {
+            printf("dirset_check: Couldn't find directory %s.\n", prev);
+            return 1;
+        }
+        if (pos) {
+            *pos = '\\';
+            pos += 2;
+        }
+        prev = pos;
+        if (pos) {
+            pos = strchr(pos, '\\');
         }
     }
+
+    return 0;
+}
+
+//set operations
+ino_t dirset(char *query) {
+
+    //check if query is correct and all directories exist
+    int res = dirset_check(query);
+    if (res) {
+        goto errlabel_dirset;
+    }
+
+    //temporary inode array
+    struct inoarr *fileinos = malloc(sizeof(struct inoarr));
+    fileinos->inos = malloc(sizeof(ino_t)*2);
+    memset(fileinos->inos, 0x0, sizeof(ino_t)*2);
+    fileinos->size = 0;
+    fileinos->exp = 2;
+
+    struct dirinfo *dir = NULL;
+    struct opendirinfo *opendir = NULL;
+
+    char *curr = query;
+    char *pos = strchr(query, '\\');
+
+    //load inodes of the first directory into temporary array
+    *pos = '\0';
+    khint_t k = kh_get(dirhash, dirh, curr);
+    if (k != kh_end(dirh)) {
+        dir = kh_val(dirh, k);
+        k = add_opendir(dir->ino);
+        if (k != kh_end(opendirh)) {
+            opendir = kh_val(opendirh, k);
+
+            for (int i = 0; i < opendir->fileinos->size; i++) {
+                insert_ino(fileinos, opendir->fileinos->inos[i]);
+            }
+        } else {
+            printf("dirset: Couldn't load directory %s\n", dir->name);
+            goto errlabel_dirset;
+        }
+    } else {
+        printf("dirset: Couldn't find directory %s\n", curr);
+        goto errlabel_dirset;
+    }
+    *pos = '\\';
+
+    char op = pos[1]; //remember first set operation
+    pos += 2;
+    curr = pos;
+    pos = strchr(pos, '\\');
+
+    //perform operations over temporary array one at a time
+    while (curr && *curr) {
+        if (pos) {
+            *pos = '\0';
+        }
+        khint_t k = kh_get(dirhash, dirh, curr);
+        if (k != kh_end(dirh)) {
+            dir = kh_val(dirh, k);
+            k = add_opendir(dir->ino);
+            if (k != kh_end(opendirh)) {
+                opendir = kh_val(opendirh, k);
+
+                if (op) {
+                    switch (op) {
+                        case '&': {
+                            for (int i = 0; i < fileinos->size; i++) {
+                                int pos = find_ino_pos(opendir->fileinos, fileinos->inos[i]);
+                                if (opendir->fileinos->inos[pos] != fileinos->inos[i]) {
+                                    remove_ino(fileinos, fileinos->inos[i]);
+                                }
+                            }
+                            break;
+                        }
+                        case '|': {
+                            for (int i = 0; i < opendir->fileinos->size; i++) {
+                                insert_ino(fileinos, opendir->fileinos->inos[i]);
+                            }
+                            break;
+                        }
+                        case '^': {
+                            for (int i = 0; i < opendir->fileinos->size; i++) {
+                                int pos = find_ino_pos(fileinos, opendir->fileinos->inos[i]);
+                                if (fileinos->inos[pos] == opendir->fileinos->inos[i]) {
+                                    remove_ino(fileinos, opendir->fileinos->inos[i]);
+                                } else {
+                                    insert_ino(fileinos, opendir->fileinos->inos[i]);
+                                }
+                            }
+                            break;
+                        }case '~': {
+                            for (int i = 0; i < opendir->fileinos->size; i++) {
+                                remove_ino(fileinos, opendir->fileinos->inos[i]);
+                            }
+                            break;
+                        }
+                        default: {
+                            printf("dirset: Malformed set operation. Use one of the characters &, |, ^ or ~, and include only the base name of a directory.\n");
+                            return 1;
+                        }
+                    }
+                }
+            } else {
+                printf("dirset: Couldn't load directory %s\n", dir->name);
+                goto errlabel_dirset;
+            }
+        } else {
+            printf("dirset: Couldn't find directory %s.\n", curr);
+            return 1;
+        }
+
+        if (pos) {
+            *pos = '\\';
+            op = pos[1];
+            pos += 2;
+        }
+        curr = pos;
+        if (pos) {
+            pos = strchr(pos, '\\');
+        }
+    }
+
+    ino_t ino = add_file(query, S_IFDIR | 0777, config.blksize);
+
+    k = add_openfile(ino);
+    if (k != kh_end(fcache)) {
+        struct openfileinfo *f = kh_value(fcache, k);
+
+        for (int i = 0; i < fileinos->size; i++) {
+            add_filetodir(f->name, fileinos->inos[i]);
+        }
+    } else {
+        printf("dirset: Couldn't find created directory.\n");
+        goto errlabel_dirset;
+    }
+
+    free(fileinos->inos);
+    free(fileinos);
+    free(query);
+
+    return ino;
+
+errlabel_dirset:
+    free(fileinos->inos);
+    free(fileinos);
+    free(query);
     return 0;
 }

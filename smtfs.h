@@ -197,7 +197,7 @@ void remove_openfile(ino_t ino, int sys_running);
 khint_t add_opendir(ino_t ino);
 void remove_opendir(ino_t ino, int sys_running);
 
-ino_t dirset(const char *name, const char *pos);
+ino_t dirset(char *query);
 
 //smtfs_disk.c
 char* get_ino_path(char *root, ino_t ino);       // "root/(ino/DIRSPLIT)/ino"

@@ -615,9 +615,9 @@ static void smt_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_
         if (k == kh_end(dirh)) {
             ino_t ino;
 
-            char const *pos = strchr(name, '\\');
-            if (pos != NULL && (pos-name)+1 != strlen(name)) {
-                ino = dirset(name, pos);
+            char *pos = strchr(name, '\\');
+            if (pos != NULL && pos[1] != '\\' && pos[1] != '\0') {
+                ino = dirset(strdup(name));
             } else {
                 ino = add_file(name, S_IFDIR | mode, config.blksize);
             }
