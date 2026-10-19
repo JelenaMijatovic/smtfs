@@ -1,5 +1,5 @@
 # smtfs
-smtfs is a FUSE semantic file system that allows the user to organise their files using directories that function like tags. It is possible to both import existing directories into smtfs and create new files within smtfs. smtfs keeps track of the underlying file system in an unobtrusive manner through extended file attributes (xattr). 
+smtfs is a FUSE virtual file system that allows the user to organise their files using directories that function like tags and support set operations. It is possible to both import existing directories into smtfs and create new files within smtfs. smtfs keeps track of the underlying file system in an unobtrusive manner through extended file attributes (xattr). 
 
 smtfs requires a Linux system that supports extended file attributes and has [FUSE](https://github.com/libfuse/libfuse) installed. Currently testing on Linux Mint.
 
@@ -32,6 +32,14 @@ A simple Bash script is included for multi-tagging:
  ./smttag.sh [-r] <tag>... ([-f <file>...] [-d <directory>...])
 ```
 Passing a directory with '-f' will tag the directory itself, while passing it with '-d' will tag all its contents. Passing '-r' removes tags.
+
+**Set operations**
+
+A directory that is a result of a set operation over existing directories can be created by passing a "query" to mkdir using the following format:
+```
+ mkdir '<dir1>\&<dir2>\&<dir3>...'
+```
+Directory intersection (\&), union (\|), difference (\~) and symmetric difference (\^) are supported over a variable number of directories. The order of operations is strictly left-to-right. Only the base names of the directories should be passed regardless of path, as directory names are unique.
 
 **Notes**
 
