@@ -1204,7 +1204,7 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
     int saverr = ENOENT;
     khint_t k;
 
-    if (ino < SYSDIR) { //don't allow removal from system directories
+    if (ino < ROOT) { //don't allow removal from system directories
         fuse_reply_err(req, EPERM);
         return;
     }
@@ -1212,22 +1212,27 @@ static void smt_removexattr(fuse_req_t req, fuse_ino_t ino, const char *name) {
     k = kh_get(dirhash, dirh, name);
     if (k != kh_end(dirh)) {
         struct dirinfo *dir = kh_value(dirh, k);
-		if (dir->ino < SYSDIR) { //don't allow removal from _TAGS or _FILES via xattr
+		if (dir->ino == ROOT) { //don't allow removal from root
 			fuse_reply_err(req, EPERM);
 			return;
 		}
 
-        k = add_openfile(ino);
-        if (k != kh_end(fcache)) {
-            struct openfileinfo *f = kh_value(fcache, k);
+		if (dir->ino == TAGS || dir->ino == FILES) { //delete from system
+            saverr = remove_file(ino);
+        } else { //remove only from given directory
+            k = add_openfile(ino);
+            if (k != kh_end(fcache)) {
+                struct openfileinfo *f = kh_value(fcache, k);
 
-            int pos = find_ino_pos(f->dirinos, dir->ino);
-            if (f->dirinos->inos[pos] == dir->ino) { //check if present
-                remove_filefromdir(name, ino);
-                saverr = 0;
+                int pos = find_ino_pos(f->dirinos, dir->ino);
+                if (f->dirinos->inos[pos] == dir->ino) { //check if present
+                    remove_filefromdir(name, ino);
+                    saverr = 0;
+                }
             }
         }
     }
+
     fuse_reply_err(req, saverr);
 }
 
