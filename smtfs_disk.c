@@ -561,10 +561,18 @@ void create_backup(char *root) {
 
                                         memset(&stbuf, 0, sizeof(stbuf));
                                     } else if (errno == ENOENT) {
-                                        printf("create_backup: ENOENT\n");
+                                        lstat(bfilepath, &stbuf);
+                                        if ((stbuf.st_mode & S_IFMT) == S_IFDIR) {
+                                            char *bcontpaths = get_file_path(bfilepath, "/contents.txt");
+                                            res = remove(bcontpaths);
+                                            if (res) {
+                                                printf("create_backup: Error while deleting contents.txt for dir %s, code %d\n", entry->d_name, errno);
+                                            }
+                                            free(bcontpaths);
+                                        }
                                         res = remove(bfilepath);
                                         if (res) {
-                                            printf("create_backup: Error while deleting previous backup file %s, code %d\n", entry->d_name, errno);
+                                            printf("create_backup: Error while deleting backup file %s, code %d\n", entry->d_name, errno);
                                         }
                                     }
 
