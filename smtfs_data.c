@@ -492,13 +492,11 @@ int remove_file(ino_t ino) {
 
         delete_file_on_disk(ino, mode);
 
-        if ((mode & S_IFMT) != S_IFDIR) {
-            free(f->name);
-            free(f->dirinos->inos);
-            free(f->dirinos);
-            free(f);
-            kh_del(openfilehash, fcache, k);
-        }
+        free(f->name);
+        free(f->dirinos->inos);
+        free(f->dirinos);
+        free(f);
+        kh_del(openfilehash, fcache, k);
     }
 
     struct freeino *newino = calloc(1, sizeof(struct freeino));
