@@ -823,17 +823,18 @@ static void smt_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) 
             char *filepath = get_ino_path(config.storage, ino);
             if (filepath) {
                 int fd;
-                int32_t flag = 0;
                 if (!config.passthrough) { //ensure file descriptor to imported file is read-only if passthrough isn't set
                     struct stat stbuf;
                     memset(&stbuf, 0, sizeof(stbuf));
-                    stat(filepath, &stbuf);
-                    if ((stbuf.st_mode & S_IFMT) == S_IFLNK) {
-                        flag |= O_RDONLY;
+                    lstat(filepath, &stbuf);
+                    if ((stbuf.st_mode & S_IFMT) == S_IFLNK && (fi->flags & O_ACCMODE) != O_RDONLY) {
+                        free(filepath);
+                        fuse_reply_err(req, EACCES);
+                        return;
                     }
                 }
 
-                fd = open(filepath, fi->flags | flag);
+                fd = open(filepath, fi->flags);
                 if (fd) {
                     ++f->nref;
                     fi->fh = fd;
