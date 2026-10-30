@@ -497,24 +497,26 @@ int remove_file(ino_t ino) {
         free(f->dirinos);
         free(f);
         kh_del(openfilehash, fcache, k);
-    }
 
-    struct freeino *newino = calloc(1, sizeof(struct freeino));
-    newino->ino = ino;
-    --config.used;
-    if (ino < freemap->ino) {
-        newino->nextfr = freemap;
-        freemap = newino;
-    } else {
-        struct freeino *curr = freemap;
-        while (curr->nextfr && curr->nextfr->ino > ino) {
-            curr = curr->nextfr;
+        struct freeino *newino = calloc(1, sizeof(struct freeino));
+        newino->ino = ino;
+        --config.used;
+        if (ino < freemap->ino) {
+            newino->nextfr = freemap;
+            freemap = newino;
+        } else {
+            struct freeino *curr = freemap;
+            while (curr->nextfr && curr->nextfr->ino > ino) {
+                curr = curr->nextfr;
+            }
+            newino->nextfr = curr->nextfr;
+            curr->nextfr = newino;
         }
-        newino->nextfr = curr->nextfr;
-        curr->nextfr = newino;
+
+        return 0;
     }
 
-    return 0;
+    return ENOENT;
 }
 
 khint_t add_openfile(ino_t ino) {
